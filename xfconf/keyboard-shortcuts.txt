@@ -9,7 +9,6 @@
 /commands/custom/<Control><Alt>d           /home/gyurix/.local/bin/toggle-desktop
 /commands/custom/<Primary><Alt>Delete      xflock4
 /commands/custom/<Primary><Alt>Escape      xkill
-/commands/custom/<Primary><Alt>f           /home/gyurix/.local/bin/fnlock-toggle
 /commands/custom/<Primary><Alt>l           xflock4
 /commands/custom/<Primary><Alt>t           x-terminal-emulator
 /commands/custom/<Primary><Shift>Escape    xfce4-taskmanager
@@ -18,7 +17,6 @@
 /commands/custom/<Shift>Print              /home/gyurix/.local/bin/rect-screenshot-clipboard full
 /commands/custom/<Super><Shift>equal       /home/gyurix/.local/bin/xfwm-fullscreen-zoom in --held
 /commands/custom/<Super><Shift>minus       /home/gyurix/.local/bin/xfwm-fullscreen-zoom out --held
-/commands/custom/<Super>Escape             /home/gyurix/.local/bin/fnlock-toggle
 /commands/custom/<Super>KP_Add             /home/gyurix/.local/bin/xfwm-fullscreen-zoom in --held
 /commands/custom/<Super>KP_Subtract        /home/gyurix/.local/bin/xfwm-fullscreen-zoom out --held
 /commands/custom/<Super>d                  /home/gyurix/.local/bin/toggle-desktop

@@ -1,2 +1,0 @@
-# Let the desktop user toggle Ideapad FnLock without authentication.
-ACTION=="add", SUBSYSTEM=="platform", DRIVERS=="ideapad_acpi", RUN+="/bin/chmod 666 %S%p/fn_lock"

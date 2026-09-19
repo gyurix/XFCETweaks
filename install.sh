@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# XFCETweaks installer. Copies user scripts, root helpers, systemd units,
-# udev rules and xfconf keybindings. Safe to re-run.
+# XFCETweaks installer. Copies user scripts, root helpers, systemd units
+# and xfconf keybindings. Safe to re-run.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -41,8 +41,19 @@ systemctl --user enable --now battery-guard.timer
 systemctl --user enable --now audio-output-autoswitch.service
 systemctl --user enable --now mic-quality.service
 systemctl --user enable --now pipewire-rt-guard.service
-systemctl --user enable --now fnlock-watch.service
 systemctl --user enable battery-hibernate-countdown.service || true
+
+# Cleanup for machines that had the removed FnLock feature installed.
+systemctl --user disable --now fnlock-watch.service 2>/dev/null || true
+rm -f "$HOME/.config/systemd/user/fnlock-watch.service" \
+    "$HOME/.local/bin/fnlock-watch" "$HOME/.local/bin/fnlock-toggle"
+xfconf-query -c xfce4-keyboard-shortcuts -r -p "/commands/custom/<Super>Escape" 2>/dev/null || true
+xfconf-query -c xfce4-keyboard-shortcuts -r -p "/commands/custom/<Primary><Alt>f" 2>/dev/null || true
+if [[ -f /etc/udev/rules.d/99-fnlock.rules ]]; then
+    echo "==> Removing obsolete FnLock udev rule"
+    sudo rm -f /etc/udev/rules.d/99-fnlock.rules
+    sudo udevadm control --reload-rules || true
+fi
 
 if [[ ! -f "$HOME/.config/XFCETweaks/audio.conf" ]]; then
     mkdir -p "$HOME/.config/XFCETweaks"
@@ -50,14 +61,10 @@ if [[ ! -f "$HOME/.config/XFCETweaks/audio.conf" ]]; then
     echo "Created ~/.config/XFCETweaks/audio.conf - fill in HEADSET_ADDRESS/HEADSET_TOKEN for Bluetooth auto-switch."
 fi
 
-echo "==> udev rule for FnLock (needs reboot or replug to take effect)"
-sudo install -m 0644 "$REPO"/udev/99-fnlock.rules /etc/udev/rules.d/99-fnlock.rules
-sudo udevadm control --reload-rules || true
-
 echo "==> xfconf keybindings and power-manager settings"
 "$REPO"/xfconf/apply.sh
 
 echo "==> Refresh icon cache"
 gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
 
-echo "Done. Log out/in if FnLock permissions or keybindings do not apply yet."
+echo "Done."

@@ -5,8 +5,6 @@ set -u
 readonly STATE_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 readonly STATE_FILE="${STATE_DIR}/battery-guard.state"
 readonly COUNTDOWN_SERVICE="battery-hibernate-countdown.service"
-readonly LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}"
-readonly LOG_FILE="${LOG_DIR}/battery-guard.log"
 
 battery=""
 for candidate in /sys/class/power_supply/*; do
@@ -23,16 +21,9 @@ capacity="$(<"$battery/capacity")"
 status="$(<"$battery/status")"
 [[ "$capacity" =~ ^[0-9]+$ ]] || exit 0
 
-fnlock=""
-for candidate in /sys/bus/platform/drivers/ideapad_acpi/VPC*/fn_lock; do
-    [[ -r "$candidate" ]] || continue
-    fnlock="$(<"$candidate")"
-    break
-done
-
 save_state() {
     # TAB-separated: status can be multi-word ("Not charging").
-    printf '%s\t%s\t%s\t%s\n' "$capacity" "$status" "$fnlock" "$now" > "$STATE_FILE"
+    printf '%s\t%s\t%s\n' "$capacity" "$status" "$now" > "$STATE_FILE"
 }
 
 # Native bar (int:value) + glyph+percent badge icon: bar, icon and exact
@@ -64,31 +55,12 @@ charge_notify() {
 # Skipped on first run so login doesn't spam.
 now="$(date +%s)"
 if [[ -r "$STATE_FILE" ]]; then
-    IFS=$'\t' read -r _ last_status last_fnlock last_run < "$STATE_FILE" || true
-    # A gap >90s since the previous tick means this is the first run after
-    # suspend (ticks are 30s) — the EC may have reset FnLock over suspend,
-    # which is not a keypress, so don't notify for it.
-    gap=0
-    if [[ "${last_run:-}" =~ ^[0-9]+$ ]] && (( now - last_run > 90 )); then
-        gap=1
-    fi
+    IFS=$'\t' read -r _ last_status _rest < "$STATE_FILE" || true
     if [[ -n "${last_status:-}" && "$status" != "$last_status" ]]; then
         if [[ "$last_status" == "Discharging" ]]; then
             charge_notify "Charger plugged in" "$capacity"
         elif [[ "$status" == "Discharging" ]]; then
             charge_notify "On battery" "$capacity"
-        fi
-    fi
-    # FnLock toggled in firmware (Fn+Esc) is invisible to the OS except
-    # through this sysfs value — report it when it changes.
-    if [[ -n "$fnlock" && -n "${last_fnlock:-}" && "$fnlock" != "$last_fnlock" ]]; then
-        mkdir -p "$LOG_DIR" 2>/dev/null || true
-        suppress=""
-        (( gap == 1 )) && suppress=" (suppressed: post-suspend)"
-        printf '%s fnlock %s->%s%s\n' "$(date -Is)" "$last_fnlock" "$fnlock" \
-            "$suppress" >> "$LOG_FILE" 2>/dev/null || true
-        if (( gap == 0 )); then
-            $HOME/.local/bin/fnlock-toggle show >/dev/null 2>&1 || true
         fi
     fi
 fi

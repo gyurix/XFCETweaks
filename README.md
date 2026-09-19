@@ -1,8 +1,7 @@
 # XFCETweaks
 
 Custom XFCE keybinding scripts and OSD notifications: perceptual brightness
-steps, fast volume HUD, mic toggle, freeze-frame region screenshots, FnLock
-toggle, show-desktop that works with Wine windows, fullscreen zoom, and a
+steps, fast volume HUD, mic toggle, freeze-frame region screenshots, and a
 battery guard with a fullscreen plug-in-charger countdown that pauses media
 and resumes on charger plug-in.
 
@@ -68,7 +67,7 @@ Results land in the clipboard via a small GTK owner process.
 ### Charger plug / battery guard (`bin/battery-guard`, `sbin/battery-shutdown-countdown`)
 
 A 30 s timer watches the battery: charger plug/unplug notifications with
-charge badges, FnLock change reports, and at ≤18% on battery a fullscreen
+charge badges, and at ≤18% on battery a fullscreen
 **plug-in-charger countdown** to hibernation. While the countdown is up it
 pauses MPRIS players (Firefox, Spotify, …) over D-Bus, and resumes exactly
 the players it paused when the charger is plugged in — never on the
@@ -79,15 +78,6 @@ hibernate path. Test mode (`--test`) skips media handling.
 
 ### Extras
 
-- `bin/fnlock-toggle` — Ideapad FnLock via sysfs (see `udev/99-fnlock.rules`
-  for passwordless access) with OSD.
-
-  ![fnlock](screenshots/feat-fnlock.png)
-
-  Note: the physical `Fn+Esc` key flips the EC directly, bypassing any
-  script — so `fnlock-watch.service` polls the sysfs value every second
-  and shows the HUD instantly on firmware-level toggles (battery-guard's
-  30 s check remains as backup).
 - `bin/toggle-desktop` — show-desktop done window-by-window so Wine
   windows (Mailbird) minimize/restore correctly.
 - `bin/xfwm-fullscreen-zoom` — Super+plus/minus zoom.
@@ -147,7 +137,7 @@ Requirements and notes:
   `xfpm-power-backlight-helper` from `xfce4-power-manager`.
 - The hibernate countdown calls `sudo -n systemctl hibernate`; allow it
   passwordless if wanted, otherwise it falls back to suspend.
-- Log out/in after install if FnLock permissions or keybindings lag.
+- Log out/in after install if keybindings lag.
 
 ## Layout
 
@@ -157,7 +147,6 @@ libexec/        screenshot cropper + clipboard owner (~/.local/libexec)
 sbin/           root helpers: brightness-step, battery-shutdown-countdown
 systemd/user/   battery, audio, mic and rt-priority units + PipeWire drop-ins
 config/         audio.conf.example (headset address for auto-switch)
-udev/           99-fnlock.rules (user-writable FnLock sysfs)
 xfconf/         apply.sh + reference dumps of current settings
 screenshots/    OSD badge samples used above
 ```

@@ -18,8 +18,6 @@ set_shortcut "XF86AudioMute" "$HOME/.local/bin/xfce-pipewire-volume mute"
 set_shortcut "XF86AudioMicMute" "$HOME/.local/bin/mic-toggle"
 set_shortcut "XF86MonBrightnessUp" "/usr/local/bin/brightness-step up"
 set_shortcut "XF86MonBrightnessDown" "/usr/local/bin/brightness-step down"
-set_shortcut "<Super>Escape" "$HOME/.local/bin/fnlock-toggle"
-set_shortcut "<Primary><Alt>f" "$HOME/.local/bin/fnlock-toggle"
 set_shortcut "<Super>d" "$HOME/.local/bin/toggle-desktop"
 set_shortcut "<Control><Alt>d" "$HOME/.local/bin/toggle-desktop"
 for key in "<Super>equal" "<Super>KP_Add" "<Super><Shift>equal"; do
