@@ -1,0 +1,4 @@
+# Copy to ~/.config/XFCETweaks/audio.conf and fill in your headset.
+# Empty values = skip the Bluetooth branch (wired plug/unplug still works).
+HEADSET_ADDRESS=
+HEADSET_TOKEN=

@@ -1,0 +1,13 @@
+[Unit]
+Description=Microphone quality defaults
+After=pipewire-pulse.service wireplumber.service filter-chain.service
+Wants=pipewire-pulse.service wireplumber.service filter-chain.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/mic-quality-setup --watch
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

@@ -35,7 +35,12 @@ bar, up to 200% overdrive).
 
 Toggles the default source mute with a muted/unmuted notification.
 
+![mic muted](screenshots/feat-mic-muted.png)
+![mic live](screenshots/feat-mic-live.png)
+
 ### Screenshots (`bin/rect-screenshot-clipboard`, `libexec/screenshot-cropper`)
+
+![screenshot](screenshots/feat-screenshot.png)
 
 `Print` freezes the screen first, so open (context) menus stay visible,
 then crops on the frozen image. Improvements in this repo:
@@ -76,12 +81,41 @@ hibernate path. Test mode (`--test`) skips media handling.
 
 - `bin/fnlock-toggle` — Ideapad FnLock via sysfs (see `udev/99-fnlock.rules`
   for passwordless access) with OSD.
+
+  ![fnlock](screenshots/feat-fnlock.png)
 - `bin/toggle-desktop` — show-desktop done window-by-window so Wine
   windows (Mailbird) minimize/restore correctly.
 - `bin/xfwm-fullscreen-zoom` — Super+plus/minus zoom.
 - `bin/smart-charge` — conservation-mode helper.
 - `bin/osd-badge` — generates and caches all OSD badge icons, rebuilding
   `icon-theme.cache` whenever a new icon name appears.
+
+### Headphone plug/unplug auto-switch (`bin/audio-output-autoswitch`)
+
+![headset](screenshots/feat-headphones.png)
+
+Keeps the default sink and existing streams on the connected headset.
+Fixes two races in naive switchers: the default is set via WirePlumber
+*before* moving existing streams (so new streams can't briefly play
+through the speakers), and during Bluetooth profile/codec renegotiation
+— when the sink briefly disappears while the headset stays connected —
+playback is *not* bounced to the speakers. Wired plug/unplug is handled
+through the ALSA fallback. Runs as `audio-output-autoswitch.service`,
+reacting to `pactl subscribe` sink/sink-input events.
+
+Configure your headset in `~/.config/XFCETweaks/audio.conf`
+(`HEADSET_ADDRESS` + `HEADSET_TOKEN`, see `config/audio.conf.example`);
+with empty values only the wired path is active.
+
+Companion audio fixes in this repo:
+
+- `bin/mic-quality-setup` (`mic-quality.service --watch`) — pins mic
+  levels (boosts off, capture 50%), keeps the `voice_clear` filter fed
+  by the real microphone only, and routes app recordings to it.
+- `bin/pipewire-rt-guard` (`pipewire-rt-guard.service`) + the
+  `systemd/user/{pipewire,pipewire-pulse,wireplumber}.service.d/`
+  drop-ins — realtime priority for PipeWire data loops so audio never
+  stutters under load.
 
 ## Installation
 
@@ -116,7 +150,8 @@ Requirements and notes:
 bin/            user keybinding scripts (~/.local/bin)
 libexec/        screenshot cropper + clipboard owner (~/.local/libexec)
 sbin/           root helpers: brightness-step, battery-shutdown-countdown
-systemd/user/   battery-guard.service/.timer, battery-hibernate-countdown.service
+systemd/user/   battery, audio, mic and rt-priority units + PipeWire drop-ins
+config/         audio.conf.example (headset address for auto-switch)
 udev/           99-fnlock.rules (user-writable FnLock sysfs)
 xfconf/         apply.sh + reference dumps of current settings
 screenshots/    OSD badge samples used above

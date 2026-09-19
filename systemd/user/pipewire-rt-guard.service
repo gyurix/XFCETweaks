@@ -1,0 +1,15 @@
+[Unit]
+Description=Ensure PipeWire data loops run at realtime priority
+After=pipewire.service pipewire-pulse.service wireplumber.service
+Wants=pipewire.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/usr/bin/sleep 8
+ExecStart=%h/.local/bin/pipewire-rt-guard
+LimitRTPRIO=95
+LimitMEMLOCK=infinity
+
+[Install]
+WantedBy=default.target

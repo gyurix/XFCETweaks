@@ -1,0 +1,69 @@
+#!/bin/sh
+# Keep the default sink and existing streams on the connected headset.
+# Moving only existing streams is racy: a new application can send audio to
+# the old default sink before the subscription handler sees it.
+set -eu
+
+# Headset Bluetooth identity: override via the environment or
+# ~/.config/XFCETweaks/audio.conf (HEADSET_ADDRESS=AA:BB:CC:DD:EE:FF and
+# HEADSET_TOKEN=AA_BB_CC_DD_EE_FF). Empty = skip the Bluetooth branch and
+# only keep streams on the first ALSA sink (wired plug/unplug still works).
+# shellcheck disable=SC1091
+[ -r "$HOME/.config/XFCETweaks/audio.conf" ] && . "$HOME/.config/XFCETweaks/audio.conf"
+JBL_ADDRESS=${HEADSET_ADDRESS:-}
+JBL_TOKEN=${HEADSET_TOKEN:-}
+
+route_streams() {
+  # The PipeWire sink list is authoritative. bluetoothctl can report the
+  # device connected before/after its audio profile exists.
+  record=""
+  if [ -n "$JBL_TOKEN" ]; then
+    record=$(pactl list short sinks | awk -v token="$JBL_TOKEN" '
+      $2 ~ "^bluez_output[.]" token "[.]" { print $1 " " $2; exit }
+    ' || true)
+  fi
+  if [ -z "$record" ]; then
+    # During Bluetooth profile/codec renegotiation the sink can disappear
+    # briefly even though the headset remains connected. Do not bounce
+    # existing playback to the speakers during that window.
+    if [ -n "$JBL_ADDRESS" ] && bluetoothctl info "$JBL_ADDRESS" 2>/dev/null |
+       grep -q '^[[:space:]]*Connected: yes$'; then
+      return 0
+    fi
+    record=$(pactl list short sinks | awk '$2 ~ /^alsa_output[.]/ { print $1 " " $2; exit }' || true)
+  fi
+  [ -n "$record" ] || return 0
+
+  target_id=${record%% *}
+  target_name=${record#* }
+
+  # Set the default before moving existing streams so newly-created streams
+  # cannot briefly play through the speakers while the headset is connected.
+  # Use WirePlumber's API rather than pactl: WirePlumber can immediately
+  # restore its configured default after a PulseAudio-compatibility change.
+  wp_id=$(wpctl status --name 2>/dev/null |
+    grep -F "$target_name" |
+    sed -n 's/^[^0-9]*\([0-9][0-9]*\)\..*/\1/p' |
+    head -n1 || true)
+  if [ -n "$wp_id" ] &&
+     [ "$(pactl get-default-sink 2>/dev/null || true)" != "$target_name" ]; then
+    wpctl set-default "$wp_id" 2>/dev/null || true
+  fi
+
+  pactl list short sink-inputs |
+    while IFS="$(printf '\t')" read -r input current_sink _; do
+      [ -n "$input" ] || continue
+      [ "$current_sink" = "$target_id" ] ||
+        pactl move-sink-input "$input" "$target_name" 2>/dev/null || true
+    done
+}
+
+route_streams
+pactl subscribe |
+  while IFS= read -r event; do
+    case "$event" in
+      *"on sink"*|*"on sink-input"*)
+        route_streams
+        ;;
+    esac
+  done

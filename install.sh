@@ -28,10 +28,26 @@ sudo install -m 0755 "$REPO"/sbin/battery-shutdown-countdown /usr/local/bin/batt
 
 echo "==> systemd user units"
 mkdir -p "$HOME/.config/systemd/user"
-install -m 0644 "$REPO"/systemd/user/* "$HOME/.config/systemd/user/"
+install -m 0644 "$REPO"/systemd/user/*.service "$HOME/.config/systemd/user/"
+install -m 0644 "$REPO"/systemd/user/*.timer "$HOME/.config/systemd/user/"
+for drop in pipewire.service.d pipewire-pulse.service.d wireplumber.service.d; do
+    if [[ -d "$REPO/systemd/user/$drop" ]]; then
+        mkdir -p "$HOME/.config/systemd/user/$drop"
+        install -m 0644 "$REPO/systemd/user/$drop"/*.conf "$HOME/.config/systemd/user/$drop/"
+    fi
+done
 systemctl --user daemon-reload
 systemctl --user enable --now battery-guard.timer
+systemctl --user enable --now audio-output-autoswitch.service
+systemctl --user enable --now mic-quality.service
+systemctl --user enable --now pipewire-rt-guard.service
 systemctl --user enable battery-hibernate-countdown.service || true
+
+if [[ ! -f "$HOME/.config/XFCETweaks/audio.conf" ]]; then
+    mkdir -p "$HOME/.config/XFCETweaks"
+    cp "$REPO/config/audio.conf.example" "$HOME/.config/XFCETweaks/audio.conf"
+    echo "Created ~/.config/XFCETweaks/audio.conf - fill in HEADSET_ADDRESS/HEADSET_TOKEN for Bluetooth auto-switch."
+fi
 
 echo "==> udev rule for FnLock (needs reboot or replug to take effect)"
 sudo install -m 0644 "$REPO"/udev/99-fnlock.rules /etc/udev/rules.d/99-fnlock.rules

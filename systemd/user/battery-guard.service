@@ -3,4 +3,4 @@ Description=Monitor battery and trigger hibernation countdown
 
 [Service]
 Type=oneshot
-ExecStart=/home/gyurix/.local/bin/battery-guard
+ExecStart=%h/.local/bin/battery-guard

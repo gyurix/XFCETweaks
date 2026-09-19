@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -uo pipefail
+RTPRIO=88
+fixed=0 ok=0 failed=0
+for tid in $(ps -eLo tid,comm --no-headers 2>/dev/null | awk '$2=="pw-data-loop"||$2=="module-rt"{print $1}'); do
+  [ -d "/proc/$tid" ] || continue
+  owner=$(stat -c %u "/proc/$tid" 2>/dev/null) || continue
+  [ "$owner" = "$(id -u)" ] || continue
+  if chrt -p "$tid" 2>/dev/null | grep -q SCHED_FIFO; then
+    ok=$((ok+1))
+  elif chrt -f -p "$RTPRIO" "$tid" 2>/dev/null; then
+    fixed=$((fixed+1))
+  else
+    failed=$((failed+1))
+  fi
+done
+echo "pipewire-rt-guard: already-rt=$ok fixed=$fixed failed=$failed (rtprio hard limit: $(ulimit -Hr))"
+[ "$failed" -eq 0 ]
