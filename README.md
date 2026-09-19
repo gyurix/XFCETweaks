@@ -83,6 +83,11 @@ hibernate path. Test mode (`--test`) skips media handling.
   for passwordless access) with OSD.
 
   ![fnlock](screenshots/feat-fnlock.png)
+
+  Note: the physical `Fn+Esc` key flips the EC directly, bypassing any
+  script — so `fnlock-watch.service` polls the sysfs value every second
+  and shows the HUD instantly on firmware-level toggles (battery-guard's
+  30 s check remains as backup).
 - `bin/toggle-desktop` — show-desktop done window-by-window so Wine
   windows (Mailbird) minimize/restore correctly.
 - `bin/xfwm-fullscreen-zoom` — Super+plus/minus zoom.

@@ -41,6 +41,7 @@ systemctl --user enable --now battery-guard.timer
 systemctl --user enable --now audio-output-autoswitch.service
 systemctl --user enable --now mic-quality.service
 systemctl --user enable --now pipewire-rt-guard.service
+systemctl --user enable --now fnlock-watch.service
 systemctl --user enable battery-hibernate-countdown.service || true
 
 if [[ ! -f "$HOME/.config/XFCETweaks/audio.conf" ]]; then

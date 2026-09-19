@@ -1,0 +1,13 @@
+[Unit]
+Description=Instant FnLock change popup (firmware Fn+Esc)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/fnlock-watch
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Instant FnLock change popup for firmware-level toggles (Fn+Esc).
+# The EC flips FnLock without involving our toggle script, so poll the
+# sysfs value every second and show the HUD on change. Cheap: one file
+# read per tick. battery-guard keeps its own 30s check as a backup.
+set -uo pipefail
+
+fn_lock=""
+for candidate in /sys/bus/platform/drivers/ideapad_acpi/VPC*/fn_lock; do
+    [[ -r "$candidate" ]] && fn_lock="$candidate" && break
+done
+[[ -n "$fn_lock" ]] || exit 0
+
+last="$(<"$fn_lock")"
+while sleep 1; do
+    cur="$(<"$fn_lock" 2>/dev/null)" || continue
+    if [[ "$cur" != "$last" ]]; then
+        last="$cur"
+        $HOME/.local/bin/fnlock-toggle show >/dev/null 2>&1 || true
+    fi
+done
