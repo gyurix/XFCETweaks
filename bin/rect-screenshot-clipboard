@@ -9,8 +9,11 @@
 #   full   - silent fullscreen capture via ImageMagick import (maps no windows,
 #            grabs nothing).
 #   window - silent active-window capture via ImageMagick import.
-#   menu   - notifies, waits 5s so a menu can be (re)opened, then captures
-#            fullscreen silently.
+#   menu   - delayed region capture for apps whose menus hide on the
+#            Print keypress itself (e.g. Firefox: the open menu owns the
+#            X grab, so the key reaches it before this script runs).
+#            Notifies, waits $SCREENSHOT_MENU_DELAY (default 5s) so the
+#            menu can be (re)opened, then captures and crops like region.
 
 mode="${1:-region}"
 
@@ -23,6 +26,30 @@ flock -n 9 || exit 0
 image=$(mktemp --tmpdir screenshot-clipboard-XXXXXX.png) || exit 1
 trap 'rm -f "$image"' EXIT HUP INT TERM
 
+# Capture the frozen screen and let the user crop it. Prints the final
+# PNG path on success, nothing on cancel/failure. Return code mirrors
+# screenshot-cropper (0 ok, 3 capture failed -> import fallback, else fail).
+grab_and_crop() {
+    frozen=$(mktemp --tmpdir screenshot-frozen-XXXXXX.png) || return 1
+    cropped="$("$HOME/.local/libexec/screenshot-cropper" --grab "$frozen")"
+    rc=$?
+    if [ $rc -eq 3 ]; then
+        if ! import -window root "png:$frozen"; then
+            rm -f "$frozen"
+            return 1
+        fi
+        cropped="$("$HOME/.local/libexec/screenshot-cropper" "$frozen")"
+        rc=$?
+    fi
+    rm -f "$image"
+    [ $rc -eq 0 ] || { rm -f "$frozen"; return 1; }
+    [ -n "$cropped" ] || { rm -f "$frozen"; return 1; }
+    if [ "$cropped" != "$frozen" ]; then
+        rm -f "$frozen"
+    fi
+    printf '%s' "$cropped"
+}
+
 case "$mode" in
     full)
         import -window root "png:$image" || exit 1
@@ -32,36 +59,25 @@ case "$mode" in
         import -window "$win" "png:$image" || exit 1
         ;;
     menu)
-        notify-send -a "Screenshot" -u low -t 4500 -i camera-photo-symbolic \
-            "Capturing in 5 seconds" "Reopen the menu now" >/dev/null 2>&1 || true
-        sleep 5
-        import -window root "png:$image" || exit 1
+        # Firefox/XUL context menus hide on the Print keypress itself (the
+        # open menu owns the X grab, so the key reaches Firefox before this
+        # script runs) - no tool can freeze them in time. Workflow instead:
+        # press Ctrl+Print, then right-click to reopen the menu during the
+        # delay; the delayed capture is cropped like region mode.
+        delay=${SCREENSHOT_MENU_DELAY:-5}
+        notify-send -a "Screenshot" -u low -t $((delay * 1000)) \
+            -i camera-photo-symbolic \
+            "Capturing in $delay seconds" \
+            "Reopen the menu now, then select the area" >/dev/null 2>&1 || true
+        sleep "$delay"
+        image="$(grab_and_crop)" || exit 1
         ;;
     region)
         # Freeze the screen first so open menus survive, then crop visually.
         # In-process GDK grab captures AND crops in a single process
         # (faster than forking ImageMagick + a second python); on capture
-        # failure (exit 3) fall back to import.
-        frozen=$(mktemp --tmpdir screenshot-frozen-XXXXXX.png) || exit 1
-        cropped="$($HOME/.local/libexec/screenshot-cropper \
-            --grab "$frozen")"
-        rc=$?
-        if [ $rc -eq 3 ]; then
-            if ! import -window root "png:$frozen"; then
-                rm -f "$frozen"
-                exit 1
-            fi
-            cropped="$($HOME/.local/libexec/screenshot-cropper \
-                "$frozen")"
-            rc=$?
-        fi
-        rm -f "$image"
-        [ $rc -eq 0 ] || { rm -f "$frozen"; exit 1; }
-        [ -n "$cropped" ] || { rm -f "$frozen"; exit 1; }
-        if [ "$cropped" != "$frozen" ]; then
-            rm -f "$frozen"
-        fi
-        image="$cropped"
+        # failure (exit 3) grab_and_crop falls back to import.
+        image="$(grab_and_crop)" || exit 1
         ;;
     *)
         echo "usage: $0 [region|full|window|menu]" >&2

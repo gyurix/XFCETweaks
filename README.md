@@ -48,8 +48,17 @@ then crops on the frozen image. Improvements in this repo:
   with automatic fallback to `import` (exit code 3 = capture failed).
 
 Modes: `region` (default, `Print`), `full` (`Shift+Print`),
-`menu` (`Ctrl+Print`, 5 s to reopen a menu), `window` (`Alt+Print`).
+`menu` (`Ctrl+Print`: notifies, waits `$SCREENSHOT_MENU_DELAY`, default
+5 s, so a menu can be reopened, then captures *and crops* like region),
+`window` (`Alt+Print`).
 Results land in the clipboard via a small GTK owner process.
+
+> Firefox note: Firefox/XUL context menus hide on the Print keypress
+> itself — the open menu owns the X grab, so the key reaches Firefox
+> before this script runs, and no screenshot tool can freeze it in time
+> (Discord/Electron menus ignore the key, which is why they capture
+> fine). For Firefox menus use `Ctrl+Print`: press it, right-click to
+> reopen the menu during the delay, then select the area.
 
 ### Charger plug / battery guard (`bin/battery-guard`, `sbin/battery-shutdown-countdown`)
 
