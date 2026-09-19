@@ -76,7 +76,7 @@ if [ -r "$pidfile" ]; then
     kill "$old_pid" 2>/dev/null || true
 fi
 
-$HOME/.local/libexec/clipboard-image-owner "$image" \
+$HOME/.local/libexec/clipboard-image-owner "$image" 9>&- \
     </dev/null >/dev/null 2>&1 &
 printf '%s\n' "$!" > "$pidfile"
 trap - EXIT
