@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+set -euo pipefail
+helper=(pkexec /usr/sbin/xfpm-power-backlight-helper)
+cur="$(${helper[@]} --get-brightness)"
+max="$(${helper[@]} --get-max-brightness)"
+
+# 20 perceptual stops for this panel baseline
+# (nvidia_wmi_ec_backlight max_brightness=800). Low end keeps the original
+# exponential shape (correct for dark adaptation); top end blends toward
+# linear so hardware jumps stay <= ~107 instead of ~172. If firmware reports
+# a different max later, scale the same curve.
+base_max=800
+base_steps=(1 2 3 5 8 13 21 34 47 70 101 142 193 253 324 403 492 589 693 800)
+steps=()
+last=0
+for b in "${base_steps[@]}"; do
+  v=$(( (b * max + base_max / 2) / base_max ))
+  (( v < 1 )) && v=1
+  (( v > max )) && v=$max
+  if (( v > last )); then
+    steps+=("$v")
+    last=$v
+  fi
+done
+total=${#steps[@]}
+
+case "${1:-}" in
+  up)
+    next_idx=$((total - 1))
+    for i in "${!steps[@]}"; do
+      if (( steps[i] > cur )); then next_idx="$i"; break; fi
+    done
+    ;;
+  down)
+    next_idx=0
+    for ((i=total-1; i>=0; i--)); do
+      if (( steps[i] < cur )); then next_idx="$i"; break; fi
+    done
+    ;;
+  *) echo "usage: brightness-step up|down" >&2; exit 2 ;;
+esac
+next="${steps[$next_idx]}"
+level=$((next_idx + 1))
+
+"${helper[@]}" --set-brightness "$next"
+if command -v notify-send >/dev/null 2>&1; then
+  # Even bar per perceptual level (not linear hardware %), plus level badge.
+  bar=$(( level * 100 / total ))
+  badge="$("$HOME/.local/bin/osd-badge" bri-lvl "$level" "$total")"
+  notify-send -a "Brightness" -u low -r 91211 \
+    -h string:x-canonical-private-synchronous:brightness \
+    -h "int:value:$bar" \
+    -i "$badge" \
+    "Brightness $level/$total" >/dev/null 2>&1 || true
+fi

@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Toggle Ideapad FnLock and show an OSD-style notification.
+# Writes sysfs directly (udev rule 99-fnlock.rules makes it user-writable,
+# no pkexec prompt), then reports the ACTUAL state read back.
+set -euo pipefail
+
+fn_lock=""
+for candidate in /sys/bus/platform/drivers/ideapad_acpi/VPC*/fn_lock; do
+    [[ -r "$candidate" ]] || continue
+    fn_lock="$candidate"
+    break
+done
+[[ -n "$fn_lock" ]] || exit 0
+
+log() {
+    printf '%s toggle %s cur=%s\n' "$(date -Is)" "${1:-?}" "$(<"$fn_lock")" \
+        >> "${XDG_STATE_HOME:-$HOME/.local/state}/fnlock-toggle.log" 2>/dev/null || true
+}
+log "invoked:${1:-toggle}"
+
+notify_fnlock() {
+    if [[ "$1" == "1" ]]; then
+        notify-send -a "FnLock" -u low -r 91213 \
+            -h string:x-canonical-private-synchronous:fnlock \
+            -i input-keyboard-symbolic \
+            "FnLock on" "Function keys act as F1–F12" >/dev/null 2>&1 || true
+    else
+        notify-send -a "FnLock" -u low -r 91213 \
+            -h string:x-canonical-private-synchronous:fnlock \
+            -i input-keyboard-symbolic \
+            "FnLock off" "Function keys act as hotkeys" >/dev/null 2>&1 || true
+    fi
+}
+
+case "${1:-toggle}" in
+    show)
+        notify_fnlock "$(<"$fn_lock")"
+        ;;
+    toggle)
+        current="$(<"$fn_lock")"
+        target="1"
+        [[ "$current" == "1" ]] && target="0"
+        if ! printf '%s' "$target" > "$fn_lock" 2>/dev/null; then
+            pkexec tee "$fn_lock" <<< "$target" >/dev/null
+        fi
+        sleep 0.2
+        notify_fnlock "$(<"$fn_lock")"
+        ;;
+    *)
+        echo "usage: fnlock-toggle [toggle|show]" >&2
+        exit 2
+        ;;
+esac

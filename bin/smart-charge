@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+control=/sys/devices/pci0000:00/0000:00:1f.0/PNP0C09:00/VPC2004:00/conservation_mode
+case "${1:-status}" in
+  on)  printf 1 | sudo -n tee "$control" >/dev/null ;;
+  off) printf 0 | sudo -n tee "$control" >/dev/null ;;
+  toggle)
+    if [ "$(cat "$control")" = 1 ]; then "$0" off; else "$0" on; fi ;;
+  status) cat "$control" ;;
+  *) echo "Usage: $0 {on|off|toggle|status}" >&2; exit 2 ;;
+esac

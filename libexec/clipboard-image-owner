@@ -1,0 +1,34 @@
+#!/usr/bin/python3
+
+import os
+import sys
+
+import gi
+
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gdk, GdkPixbuf, Gtk
+
+
+def main() -> int:
+    if len(sys.argv) != 2:
+        return 2
+
+    path = sys.argv[1]
+    try:
+        image = GdkPixbuf.Pixbuf.new_from_file(path)
+    finally:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+
+    clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+    clipboard.set_image(image)
+
+    # Stay alive while owning CLIPBOARD. Next screenshot replaces this process.
+    Gtk.main()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

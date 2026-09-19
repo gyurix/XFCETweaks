@@ -1,0 +1,102 @@
+#!/bin/sh
+# Toggle show-desktop, implemented manually window-by-window.
+# Reason: Wine windows (e.g. Mailbird) ignore the EWMH _NET_SHOWING_DESKTOP
+# broadcast (`wmctrl -k on`), and xfwm4 cancels showing-desktop as soon as
+# any window is touched while it is active -- so leftovers cannot be
+# force-minimized afterwards. Minimizing every visible window ourselves
+# (xdotool windowminimize works on both native and Wine windows) avoids
+# both problems.
+STATE_DIR="${XDG_RUNTIME_DIR:-/tmp}/toggle-desktop"
+ACTIVE="$STATE_DIR/active"
+IDS="$STATE_DIR/windows"
+FOCUS="$STATE_DIR/focus"
+
+window_type() {
+    xprop -id "$1" _NET_WM_WINDOW_TYPE 2>/dev/null
+}
+
+is_minimizable() {
+    window_type "$1" | grep -q -E '_NET_WM_WINDOW_TYPE_(NORMAL|DIALOG|UTILITY)'
+}
+
+is_normal_state() {
+    xprop -id "$1" WM_STATE 2>/dev/null | grep -q 'window state: Normal'
+}
+
+window_exists() {
+    xprop -id "$1" WM_STATE >/dev/null 2>&1
+}
+
+current_desktop() {
+    xprop -root _NET_CURRENT_DESKTOP 2>/dev/null | awk '{print $NF}'
+}
+
+window_desktop() {
+    xprop -id "$1" _NET_WM_DESKTOP 2>/dev/null | awk '{print $NF}'
+}
+
+to_hex() {
+    case "$1" in
+        0x*) printf '%s' "$1" ;;
+        ''|*[!0-9]*) printf '' ;;
+        *) printf '0x%x' "$1" ;;
+    esac
+}
+
+if [ -f "$ACTIVE" ]; then
+    # --- restore desktop ---
+    rm -f "$ACTIVE"
+    if [ -f "$IDS" ]; then
+        while read -r id; do
+            [ -n "$id" ] || continue
+            window_exists "$id" || continue
+            # windowmap revives Withdrawn (Wine) windows; remove,hidden
+            # un-minimizes Iconic ones. Both are harmless no-ops otherwise.
+            xdotool windowmap --sync "$id" >/dev/null 2>&1
+            wmctrl -i -r "$id" -b remove,hidden >/dev/null 2>&1
+            # Iconic Wine windows additionally need an activation to map.
+            if xprop -id "$id" WM_CLASS 2>/dev/null | grep -q '\.exe"'; then
+                wmctrl -i -a "$id" >/dev/null 2>&1
+            fi
+        done < "$IDS"
+        rm -f "$IDS"
+    fi
+    if [ -f "$FOCUS" ]; then
+        read -r focus < "$FOCUS"
+        rm -f "$FOCUS"
+        focus=$(to_hex "$focus")
+        if [ -n "$focus" ] && window_exists "$focus"; then
+            wmctrl -i -a "$focus" >/dev/null 2>&1
+        fi
+    fi
+else
+    # --- show desktop ---
+    mkdir -p "$STATE_DIR"
+    focus=$(to_hex "$(xdotool getactivewindow 2>/dev/null)")
+    if [ -n "$focus" ] && is_minimizable "$focus"; then
+        printf '%s' "$focus" > "$FOCUS"
+    else
+        rm -f "$FOCUS"
+    fi
+    desk=$(current_desktop)
+    : > "$IDS"
+    wmctrl -l 2>/dev/null | awk '{print $1}' | while read -r id; do
+        wdesk=$(window_desktop "$id")
+        case "$wdesk" in
+            "$desk"|0xFFFFFFFF|4294967295) ;;
+            *) continue ;;
+        esac
+        is_minimizable "$id" || continue
+        is_normal_state "$id" || continue
+        printf '%s\n' "$id" >> "$IDS"
+    done
+    # Minimize after collecting: WM_CHANGE_STATE is honored by Wine too,
+    # unlike _NET_SHOWING_DESKTOP.
+    if [ -f "$IDS" ]; then
+        while read -r id; do
+            [ -n "$id" ] || continue
+            xdotool windowminimize "$id" >/dev/null 2>&1
+        done < "$IDS"
+    fi
+    : > "$ACTIVE"
+fi

@@ -1,0 +1,11 @@
+[Unit]
+Description=Full-screen two-minute battery hibernation countdown
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/battery-shutdown-countdown --trigger
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=5s

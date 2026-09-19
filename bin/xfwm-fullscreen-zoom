@@ -1,0 +1,20 @@
+#!/bin/sh
+set -eu
+
+case "${1:-}" in
+    in) button=4 ;;
+    out) button=5 ;;
+    *) echo "usage: ${0##*/} in|out [--held]" >&2; exit 2 ;;
+esac
+
+steps=${ZOOM_STEPS:-3}
+
+xdotool keyup Shift_L Shift_R Control_L Control_R Alt_L Alt_R Meta_L Meta_R >/dev/null 2>&1 || true
+
+if [ "${2:-}" = "--held" ]; then
+    xdotool click --repeat "$steps" --delay 15 "$button"
+else
+    xdotool keydown super
+    xdotool click --repeat "$steps" --delay 15 "$button"
+    xdotool keyup super
+fi

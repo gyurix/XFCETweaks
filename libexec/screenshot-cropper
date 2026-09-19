@@ -1,0 +1,218 @@
+#!/usr/bin/python3
+"""Region selector on an already-captured screenshot.
+
+Usage: screenshot-cropper <image.png>
+       screenshot-cropper --grab <out.png>
+Shows the image fullscreen (frozen - menus captured earlier stay visible),
+lets the user drag a crop rectangle, prints the cropped PNG path on success.
+Grabs keyboard+pointer while up so Print/keys can't leak to other apps
+(open context menus stay open).
+
+  --grab <out.png>       capture the root window in-process (faster than
+                         forking ImageMagick) into <out.png>, then crop it
+  left-drag + release  crop selection to stdout path
+  Enter                whole image (prints the input path)
+  Esc / right-click    cancel (no output, exit 1)
+"""
+import os
+import sys
+import tempfile
+
+import gi
+
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+from gi.repository import Gdk, GdkPixbuf, Gtk
+
+
+class Cropper(Gtk.Window):
+    def __init__(self, path):
+        super().__init__(type=Gtk.WindowType.POPUP)
+        self.set_accept_focus(True)
+        self.set_app_paintable(True)
+        self.set_skip_taskbar_hint(True)
+        self.set_skip_pager_hint(True)
+        self.set_resizable(False)
+        self.path = path
+        self.pixbuf = GdkPixbuf.Pixbuf.new_from_file(path)
+        self.start = None
+        self.current = None
+        self.result = None
+        self.exit_code = 1
+
+        # Cover the whole Xinerama bounding box (may start at <0,0>).
+        screen = self.get_screen()
+        min_x = min_y = 0
+        for i in range(screen.get_n_monitors()):
+            geo = screen.get_monitor_geometry(i)
+            min_x = min(min_x, geo.x)
+            min_y = min(min_y, geo.y)
+        self.move(min_x, min_y)
+        self.set_default_size(screen.get_width(), screen.get_height())
+        self.resize(screen.get_width(), screen.get_height())
+
+        area = Gtk.DrawingArea()
+        area.connect("draw", self.on_draw)
+        self.add(area)
+        self.add_events(
+            Gdk.EventMask.BUTTON_PRESS_MASK
+            | Gdk.EventMask.BUTTON_RELEASE_MASK
+            | Gdk.EventMask.POINTER_MOTION_MASK
+            | Gdk.EventMask.KEY_PRESS_MASK
+        )
+        self.connect("button-press-event", self.on_press)
+        self.connect("button-release-event", self.on_release)
+        self.connect("motion-notify-event", self.on_motion)
+        self.connect("key-press-event", self.on_key)
+
+    def run(self):
+        self.show_all()
+        self.present()
+        self.grab_focus()
+        self.grab_input()
+        window = self.get_window()
+        if window is not None:
+            cursor = Gdk.Cursor.new_from_name(
+                Gdk.Display.get_default(), "crosshair"
+            )
+            if cursor is not None:
+                window.set_cursor(cursor)
+        Gtk.main()
+        return self.exit_code
+
+    def grab_input(self):
+        """Grab keyboard+pointer so Print/keys can't reach other apps
+        (open context menus stay put) while the cropper is up."""
+        window = self.get_window()
+        if window is None:
+            return
+        seat = Gdk.Display.get_default().get_default_seat()
+        seat.grab(
+            window,
+            Gdk.SeatCapabilities.KEYBOARD | Gdk.SeatCapabilities.POINTER,
+            False,
+            None,
+            None,
+            None,
+            None,
+        )
+
+    def finish(self, code=1):
+        Gdk.Display.get_default().get_default_seat().ungrab()
+        self.exit_code = code
+        Gtk.main_quit()
+
+    def selection(self):
+        (x0, y0), (x1, y1) = self.start, self.current
+        x, y = min(x0, x1), min(y0, y1)
+        w, h = abs(x1 - x0), abs(y1 - y0)
+        pw, ph = self.pixbuf.get_width(), self.pixbuf.get_height()
+        x, y = max(0, x), max(0, y)
+        w, h = min(w, pw - x), min(h, ph - y)
+        return x, y, w, h
+
+    def on_draw(self, _widget, cr):
+        Gdk.cairo_set_source_pixbuf(cr, self.pixbuf, 0, 0)
+        cr.paint()
+        if self.start is not None and self.current is not None:
+            x, y, w, h = self.selection()
+            pw, ph = self.pixbuf.get_width(), self.pixbuf.get_height()
+            cr.set_source_rgba(0, 0, 0, 0.55)
+            for rx, ry, rw, rh in (
+                (0, 0, pw, y),
+                (0, y + h, pw, ph - y - h),
+                (0, y, x, h),
+                (x + w, y, pw - x - w, h),
+            ):
+                if rw > 0 and rh > 0:
+                    cr.rectangle(rx, ry, rw, rh)
+                    cr.fill()
+            cr.set_source_rgb(1, 1, 1)
+            cr.set_line_width(2)
+            cr.rectangle(x, y, w, h)
+            cr.stroke()
+            cr.select_font_face("monospace")
+            cr.set_font_size(14)
+            cr.move_to(x + 4, max(16, y - 8))
+            cr.show_text(f"{w}x{h}")
+        return False
+
+    def on_press(self, _widget, event):
+        if event.button == 1:
+            self.start = (int(event.x), int(event.y))
+            self.current = self.start
+            self.queue_draw()
+        elif event.button == 3:
+            self.finish(1)
+        return True
+
+    def on_motion(self, _widget, event):
+        if self.start is not None:
+            self.current = (int(event.x), int(event.y))
+            self.queue_draw()
+        return True
+
+    def on_release(self, _widget, event):
+        if event.button != 1 or self.start is None:
+            return True
+        self.current = (int(event.x), int(event.y))
+        x, y, w, h = self.selection()
+        if w < 5 or h < 5:
+            self.finish(1)
+            return True
+        sub = self.pixbuf.new_subpixbuf(x, y, w, h)
+        fd, out = tempfile.mkstemp(prefix="screenshot-crop-", suffix=".png")
+        os.close(fd)
+        sub.savev(out, "png", [], [])
+        self.result = out
+        self.finish(0)
+        return True
+
+    def on_key(self, _widget, event):
+        if event.keyval in (Gdk.KEY_Escape,):
+            self.finish(1)
+        elif event.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
+            self.result = self.path
+            self.finish(0)
+        return True
+
+
+def grab_root(out):
+    """Capture the root window without forking an external tool."""
+    root = Gdk.get_default_root_window()
+    if root is None:
+        return False
+    pixbuf = Gdk.pixbuf_get_from_window(
+        root, 0, 0, root.get_width(), root.get_height()
+    )
+    if pixbuf is None:
+        return False
+    pixbuf.savev(out, "png", [], [])
+    return True
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    if args[:1] == ["--grab"] and len(args) == 2:
+        # Exit 3 = capture itself failed (caller may fall back to
+        # ImageMagick); exit 1 = user cancelled in the cropper.
+        if not grab_root(args[1]):
+            return 3
+        path = args[1]
+    elif len(args) == 1:
+        path = args[0]
+    else:
+        print(
+            f"usage: {sys.argv[0]} [--grab <out.png>] <image.png>",
+            file=sys.stderr,
+        )
+        return 2
+    win = Cropper(path)
+    code = win.run()
+    if code == 0 and win.result:
+        print(win.result)
+    return code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

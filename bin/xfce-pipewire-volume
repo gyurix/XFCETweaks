@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# Fast volume OSD control. Uses wpctl so one query returns volume AND mute
+# state (pactl needed 3+ roundtrips per keypress, which lagged on repeats).
+# Notification: icon-only badge PNG (glyph + exact percent + bar), empty
+# summary so the bubble shrinks to the icon with no redundant text.
+set -euo pipefail
+
+SINK="@DEFAULT_AUDIO_SINK@"
+
+# One query -> "Volume: 0.75 [MUTED]" or "Volume: 0.75".
+read_state() {
+    local out frac
+    out="$(wpctl get-volume "$SINK")" || return 1
+    frac="$(awk '{print $2}' <<< "$out")"
+    current="$(awk -v f="$frac" 'BEGIN {printf "%d", f*100+0.5}')"
+    if [[ "$out" == *"[MUTED]"* ]]; then muted=yes; else muted=no; fi
+    [[ "$current" =~ ^[0-9]+$ ]] || return 1
+}
+
+badge() {
+    # Mirrors osd-badge vol tiering so the hot path is one file check.
+    # Single OSD type (wide badge, no native widget) so replace-by-ID
+    # never leaves a stale second bubble behind.
+    local n="$1" tier rounded name
+    if (( n > 100 )); then tier=overamplified;
+    elif (( n > 66 )); then tier=high;
+    elif (( n > 33 )); then tier=medium;
+    elif (( n == 0 )); then tier=muted;
+    else tier=low; fi
+    rounded=$(( (n / 5) * 5 ))
+    name="osd-volbar-$tier-$rounded"
+    [[ -f "$HOME/.local/share/icons/hicolor/48x48/status/$name.png" ]] \
+        || $HOME/.local/bin/osd-badge vol "$n" > /dev/null
+    printf '%s' "$name"
+}
+
+notify_vol() {
+    # Icon-only HUD: the badge PNG already carries glyph + exact percent +
+    # bar, so send an empty summary. xfce4-notifyd then hides the text
+    # column and the bubble auto-shrinks to icon + padding (no redundancy,
+    # no leftover empty space). notify-send cannot send an empty summary,
+    # hence raw D-Bus (same app/replace/sync/urgency/timeout as before).
+    gdbus call --session --dest org.freedesktop.Notifications \
+        --object-path /org/freedesktop/Notifications \
+        --method org.freedesktop.Notifications.Notify -- \
+        Volume 91210 "$(badge "$1")" '' '' '[]' \
+        "{'x-canonical-private-synchronous': <'volume'>, 'urgency': <byte 0>}" -1 \
+        >/dev/null 2>&1 || true
+}
+
+case "${1:-}" in
+    up|down)
+        read_state || exit 1
+        if [[ "$1" == "up" ]]; then
+            # Snap upward to the next 5% boundary.
+            target=$(( ((current + 4) / 5) * 5 ))
+            [ "$target" -gt "$current" ] || target=$((target + 5))
+        else
+            # Snap downward to the previous 5% boundary.
+            target=$(( (current / 5) * 5 ))
+            [ "$target" -lt "$current" ] || target=$((target - 5))
+        fi
+        [ "$target" -lt 0 ] && target=0
+        [ "$target" -gt 200 ] && target=200
+        wpctl set-mute "$SINK" 0 2>/dev/null || true
+        if wpctl set-volume "$SINK" "$(awk "BEGIN {printf \"%.2f\", $target/100}")" -l 2.0 2>/dev/null; then
+            notify_vol "$target"
+        else
+            # Sink refused (e.g. hardware capped at 100%): report reality.
+            read_state && notify_vol "$current"
+        fi
+        ;;
+    mute)
+        wpctl set-mute "$SINK" toggle 2>/dev/null || true
+        read_state || exit 1
+        if [[ "$muted" == "yes" ]]; then
+            notify-send -a "Volume" -u low -r 91210 \
+                -h string:x-canonical-private-synchronous:volume \
+                -i audio-volume-muted-symbolic \
+                "Volume muted" >/dev/null 2>&1 || true
+        else
+            notify_vol "$current"
+        fi
+        ;;
+    *)
+        echo "Usage: $0 {up|down|mute}" >&2
+        exit 2
+        ;;
+esac

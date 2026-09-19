@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Toggle default microphone mute and show an OSD-style notification.
+set -euo pipefail
+
+src="@DEFAULT_SOURCE@"
+pactl set-source-mute "$src" toggle
+muted="$(pactl get-source-mute "$src" | awk '{print $2}')"
+
+if command -v notify-send >/dev/null 2>&1; then
+  if [[ "$muted" == "yes" ]]; then
+    notify-send -a "Microphone" -u low -r 91212 \
+      -h string:x-canonical-private-synchronous:microphone \
+      -i microphone-sensitivity-muted-symbolic \
+      "Microphone muted" >/dev/null 2>&1 || true
+  else
+    notify-send -a "Microphone" -u low -r 91212 \
+      -h string:x-canonical-private-synchronous:microphone \
+      -i microphone-sensitivity-high-symbolic \
+      "Microphone unmuted" >/dev/null 2>&1 || true
+  fi
+fi

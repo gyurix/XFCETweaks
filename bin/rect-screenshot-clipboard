@@ -1,0 +1,86 @@
+#!/bin/sh
+# Capture to clipboard without opening Xfce's post-capture dialog. A small GTK
+# process stays alive as the X11 clipboard owner, so apps can read the PNG later.
+#
+# Modes:
+#   region - capture fullscreen silently first, then select the crop area on
+#            the frozen image (open menus stay visible). Drag + release crops,
+#            Enter keeps everything, Esc/right-click cancels.
+#   full   - silent fullscreen capture via ImageMagick import (maps no windows,
+#            grabs nothing).
+#   window - silent active-window capture via ImageMagick import.
+#   menu   - notifies, waits 5s so a menu can be (re)opened, then captures
+#            fullscreen silently.
+
+mode="${1:-region}"
+
+# Single instance: a second Print press while a capture is in progress
+# exits silently instead of stacking cropper windows.
+lock=${XDG_RUNTIME_DIR:-/tmp}/screenshot-clipboard.lock
+exec 9>"$lock" || exit 1
+flock -n 9 || exit 0
+
+image=$(mktemp --tmpdir screenshot-clipboard-XXXXXX.png) || exit 1
+trap 'rm -f "$image"' EXIT HUP INT TERM
+
+case "$mode" in
+    full)
+        import -window root "png:$image" || exit 1
+        ;;
+    window)
+        win=$(xdotool getactivewindow 2>/dev/null) || exit 1
+        import -window "$win" "png:$image" || exit 1
+        ;;
+    menu)
+        notify-send -a "Screenshot" -u low -t 4500 -i camera-photo-symbolic \
+            "Capturing in 5 seconds" "Reopen the menu now" >/dev/null 2>&1 || true
+        sleep 5
+        import -window root "png:$image" || exit 1
+        ;;
+    region)
+        # Freeze the screen first so open menus survive, then crop visually.
+        # In-process GDK grab captures AND crops in a single process
+        # (faster than forking ImageMagick + a second python); on capture
+        # failure (exit 3) fall back to import.
+        frozen=$(mktemp --tmpdir screenshot-frozen-XXXXXX.png) || exit 1
+        cropped="$($HOME/.local/libexec/screenshot-cropper \
+            --grab "$frozen")"
+        rc=$?
+        if [ $rc -eq 3 ]; then
+            if ! import -window root "png:$frozen"; then
+                rm -f "$frozen"
+                exit 1
+            fi
+            cropped="$($HOME/.local/libexec/screenshot-cropper \
+                "$frozen")"
+            rc=$?
+        fi
+        rm -f "$image"
+        [ $rc -eq 0 ] || { rm -f "$frozen"; exit 1; }
+        [ -n "$cropped" ] || { rm -f "$frozen"; exit 1; }
+        if [ "$cropped" != "$frozen" ]; then
+            rm -f "$frozen"
+        fi
+        image="$cropped"
+        ;;
+    *)
+        echo "usage: $0 [region|full|window|menu]" >&2
+        exit 2
+        ;;
+esac
+[ -s "$image" ] || exit 1
+
+pidfile=${XDG_RUNTIME_DIR:-/tmp}/clipboard-image-owner.pid
+if [ -r "$pidfile" ]; then
+    old_pid=$(cat "$pidfile")
+    kill "$old_pid" 2>/dev/null || true
+fi
+
+$HOME/.local/libexec/clipboard-image-owner "$image" \
+    </dev/null >/dev/null 2>&1 &
+printf '%s\n' "$!" > "$pidfile"
+trap - EXIT
+
+# Brief confirmation that something landed in the clipboard.
+notify-send -a "Screenshot" -u low -t 1500 -i camera-photo-symbolic \
+    "Screenshot in clipboard" >/dev/null 2>&1 || true

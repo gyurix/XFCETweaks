@@ -1,0 +1,11 @@
+[Unit]
+Description=Check laptop battery every 30 seconds
+
+[Timer]
+OnBootSec=15s
+OnUnitActiveSec=30s
+AccuracySec=1s
+Unit=battery-guard.service
+
+[Install]
+WantedBy=timers.target

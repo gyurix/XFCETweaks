@@ -1,0 +1,255 @@
+#!/usr/bin/env python3
+"""Generate (and cache) OSD badge icons: themed glyph + exact percent.
+
+Usage:
+  osd-badge vol <pct> [muted]      volume tier glyph + percent
+  osd-badge bri <pct>              brightness sun glyph + percent
+  osd-badge bri-lvl <level> <total> brightness sun glyph + level/total
+  osd-badge chg <pct> <status>     battery level glyph + percent
+  osd-badge pct <pct>              plain number badge (compat)
+
+Prints the icon NAME (hicolor theme). Values round to steps of 5 so rapid
+key presses hit the cache: no extra processes on the hot path.
+
+Badges with step > 100 carry a red overdrive tip on their mini bar.
+"""
+import os
+import sys
+
+ICON_DIR = os.path.expanduser("~/.local/share/icons/hicolor/48x48/status")
+ADW = "/usr/share/icons/Adwaita/symbolic/status"
+H = 56
+W = 148
+BG = (45, 45, 45, 255)
+FG = (255, 255, 255, 255)
+TRACK = (26, 26, 26, 255)
+BLUE = (33, 150, 243, 255)
+RED = (239, 83, 80, 255)
+FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+FONT_SIZE = 26  # fixed: identical size for 2-, 3- and 4-digit values
+GLYPH_PX = 32
+PAD = 10
+PAD_RIGHT = 5  # tighter toward the OSD bar
+GAP = 12
+
+
+def white_glyph(src_path):
+    """Rasterize a symbolic SVG into a white RGBA PIL image."""
+    import tempfile
+
+    import gi
+
+    gi.require_version("GdkPixbuf", "2.0")
+    from gi.repository import GdkPixbuf
+    from PIL import Image
+
+    pix = GdkPixbuf.Pixbuf.new_from_file_at_size(
+        src_path, GLYPH_PX * 3, GLYPH_PX * 3
+    )
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+        tmppath = tmp.name
+    try:
+        pix.savev(tmppath, "png", [], [])
+        img = Image.open(tmppath).convert("RGBA").resize(
+            (GLYPH_PX, GLYPH_PX), Image.LANCZOS
+        )
+    finally:
+        os.unlink(tmppath)
+    white = Image.new("RGBA", img.size, (255, 255, 255, 255))
+    white.putalpha(img.split()[3])
+    return white
+
+
+def volume_tier(pct, muted=False):
+    if muted or pct == 0:
+        return "muted"
+    if pct > 100:
+        return "overamplified"
+    if pct > 66:
+        return "high"
+    if pct > 33:
+        return "medium"
+    return "low"
+
+
+def spec_from_args(argv):
+    """Return (name, glyph_path_or_None, text, wide_bar_bool)."""
+    if argv[0] == "vol":
+        pct = max(0, min(200, int(argv[1])))
+        tier = volume_tier(pct)
+        step = (pct // 5) * 5
+        glyph = os.path.join(ADW, f"audio-volume-{tier}-symbolic.svg")
+        if pct > 100:
+            return f"osd-volbar-overamplified-{step}", glyph, f"{pct}%", True
+        return f"osd-volbar-{tier}-{step}", glyph, f"{pct}%", True
+    if argv[0] == "bri-lvl":
+        level = max(1, int(argv[1]))
+        total = max(level, int(argv[2])) if len(argv) > 2 else 20
+        level = min(level, total)
+        glyph = os.path.join(ADW, "display-brightness-symbolic.svg")
+        return f"osd-bri-lvl-{level}-of-{total}", glyph, f"{level}/{total}", False
+    if argv[0] == "bri":
+        pct = max(0, min(100, int(argv[1])))
+        step = (pct // 5) * 5
+        glyph = os.path.join(ADW, "display-brightness-symbolic.svg")
+        return f"osd-bri-{step}", glyph, f"{pct}%", False
+    if argv[0] == "chg":
+        pct = max(0, min(100, int(argv[1])))
+        charging = argv[2] != "Discharging"
+        step = (pct // 5) * 5
+        level = (pct // 10) * 10
+        if charging and level >= 100:
+            glyph = os.path.join(ADW, "battery-level-100-charged-symbolic.svg")
+            tag = "full"
+        else:
+            suffix = "-charging" if charging else ""
+            glyph = os.path.join(
+                ADW, f"battery-level-{level}{suffix}-symbolic.svg"
+            )
+            tag = ("c" if charging else "d") + str(level)
+        return f"osd-chg-{tag}-{step}", glyph, f"{pct}%", False
+    # plain number badge
+    pct = max(0, min(200, int(argv[0])))
+    step = (pct // 5) * 5
+    return f"osd-pct-{step}", None, f"{step}%", False
+
+
+def main() -> int:
+    from PIL import Image, ImageDraw, ImageFont
+
+    try:
+        name, glyph_path, text, wide = spec_from_args(sys.argv[1:])
+    except (IndexError, ValueError):
+        print(f"usage: {sys.argv[0]} vol|bri|chg|pct ...", file=sys.stderr)
+        return 2
+    os.makedirs(ICON_DIR, exist_ok=True)
+    path = os.path.join(ICON_DIR, f"{name}.png")
+    if not os.path.exists(path):
+        if wide:
+            draw_wide_badge(path, glyph_path, text)
+        else:
+            draw_compact_badge(path, glyph_path, text)
+        # New icon names are invisible to theme-name lookups until
+        # icon-theme.cache is rebuilt (that staleness showed as a broken
+        # notification icon). Rebuild synchronously: this branch runs only
+        # once per new icon (hot path hits the file-exists check above),
+        # and the rasterization above already costs far more than this.
+        # NOTE: the cache lives at the theme root (hicolor/), not in the
+        # 48x48/status subdir.
+        try:
+            import subprocess
+
+            theme_dir = os.path.dirname(os.path.dirname(ICON_DIR))
+            subprocess.run(
+                ["gtk-update-icon-cache", "-f", "-t", theme_dir],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                timeout=30,
+                check=False,
+            )
+        except Exception:
+            pass
+    print(name)
+    return 0
+
+
+def load_font():
+    from PIL import ImageFont
+
+    try:
+        return ImageFont.truetype(FONT_PATH, FONT_SIZE)
+    except OSError:
+        return ImageFont.load_default()
+
+
+def draw_compact_badge(path, glyph_path, text):
+    """Tight badge: glyph + number, minimal right padding."""
+    from PIL import Image, ImageDraw
+
+    font = load_font()
+    tmp = ImageDraw.Draw(Image.new("RGBA", (8, 8)))
+    bbox = tmp.textbbox((0, 0), text, font=font)
+    tw = bbox[2] - bbox[0]
+    has_glyph = glyph_path is not None and os.path.exists(glyph_path)
+    tx = PAD + (GLYPH_PX + GAP if has_glyph else 0)
+    w = tx + tw + 6
+    img = Image.new("RGBA", (w, H), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.rounded_rectangle([0, 0, w - 1, H - 1], radius=10, fill=BG)
+    if has_glyph:
+        try:
+            img.alpha_composite(
+                white_glyph(glyph_path), (PAD, (H - GLYPH_PX) // 2)
+            )
+        except Exception:
+            pass
+    bbox = draw.textbbox((0, 0), text, font=font)
+    draw.text(
+        (tx, (H - (bbox[3] - bbox[1])) / 2 - bbox[1]),
+        text,
+        font=font,
+        fill=FG,
+    )
+    img.save(path)
+
+
+def draw_wide_badge(path, glyph_path, text):
+    """Overdrive badge mirroring the native OSD row: glyph + percent on
+    the left, full-length bar on the right with the red share first
+    (150% = first half red, second half blue). Bar geometry is constant
+    so the red share reads as the excess over 100."""
+    from PIL import Image, ImageDraw
+
+    bar_len, bar_h = 200, 14
+    left_w = PAD + GLYPH_PX + GAP + 84
+    ww, hh = left_w + GAP + bar_len + PAD, 56
+    font = load_font()
+    img = Image.new("RGBA", (ww, hh), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.rounded_rectangle([0, 0, ww - 1, hh - 1], radius=10, fill=BG)
+    tx = PAD
+    if glyph_path is not None and os.path.exists(glyph_path):
+        try:
+            img.alpha_composite(
+                white_glyph(glyph_path), (PAD, (hh - GLYPH_PX) // 2)
+            )
+            tx = PAD + GLYPH_PX + GAP
+        except Exception:
+            pass
+    bbox = draw.textbbox((0, 0), text, font=font)
+    draw.text(
+        (tx, (hh - (bbox[3] - bbox[1])) / 2 - bbox[1]),
+        text,
+        font=font,
+        fill=FG,
+    )
+    step_num = int(text.rstrip("%"))
+    x0, x1 = left_w + GAP, left_w + GAP + bar_len
+    y0, y1 = (hh - bar_h) // 2, (hh + bar_h) // 2
+    draw.rounded_rectangle([x0, y0, x1, y1], radius=bar_h // 2, fill=TRACK)
+    over = max(0, step_num - 100)
+    if over > 0:
+        # Full bar, red share first proportional to the excess.
+        draw.rounded_rectangle([x0, y0, x1, y1], radius=bar_h // 2, fill=BLUE)
+        red_w = bar_len * over // 100
+        if red_w > 0:
+            draw.rounded_rectangle(
+                [x0, y0, x0 + max(red_w, bar_h), y1],
+                radius=bar_h // 2,
+                fill=RED,
+            )
+    else:
+        # Partial blue fill proportional to the level.
+        blue_len = bar_len * step_num // 100
+        if blue_len > 0:
+            draw.rounded_rectangle(
+                [x0, y0, x0 + max(blue_len, bar_h), y1],
+                radius=bar_h // 2,
+                fill=BLUE,
+            )
+    img.save(path)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
