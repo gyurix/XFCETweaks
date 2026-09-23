@@ -19,6 +19,7 @@ XFCE 4.18 (X11). No secrets in this repo.
 | | [Fullscreen zoom](#fullscreen-zoom) | Super+plus/minus magnifier |
 | | [Smart charge](#smart-charge) | Conservation-mode helper |
 | | [OSD badges](#osd-badge-engine) | Cached icon engine behind every HUD |
+| | [Icon theme guard](#icon-theme-guard) | Stops missing system icons (start menu, apps) |
 
 ### Brightness
 
@@ -200,6 +201,29 @@ ignored by Wine and xfwm4 cancels it on touch).
 `bin/osd-badge` generates and caches every HUD badge icon (glyph + text),
 rebuilding `icon-theme.cache` whenever a new icon name appears so
 notifications never show a broken icon.
+
+</details>
+
+### Icon theme guard
+
+<details>
+<summary>Read more</summary>
+
+GTK reads the directory list of `hicolor` from the first `index.theme` it
+finds, and `~/.local/share/icons/hicolor/index.theme` wins over the system
+one. A minimal user copy (needed for `gtk-update-icon-cache`) hides every
+system `hicolor` directory it omits, e.g. `scalable/apps` holding the Mint
+start-menu icon.
+
+| Trigger | Action |
+| --- | --- |
+| Login | `hicolor-index-sync.service` runs once |
+| User or system `index.theme` rewritten | `hicolor-index-sync.path` reruns it |
+
+`bin/hicolor-index-sync` rewrites the user file as the system
+`index.theme` plus sections for user-only size directories (Wine, app
+installers), then rebuilds `icon-theme.cache`. Unchanged content is not
+rewritten, so the path unit does not loop.
 
 </details>
 

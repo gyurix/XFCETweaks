@@ -1,0 +1,10 @@
+[Unit]
+Description=Resync user hicolor index.theme whenever it is rewritten
+
+[Path]
+PathChanged=%h/.local/share/icons/hicolor/index.theme
+PathChanged=/usr/share/icons/hicolor/index.theme
+Unit=hicolor-index-sync.service
+
+[Install]
+WantedBy=default.target

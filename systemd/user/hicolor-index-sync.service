@@ -1,0 +1,9 @@
+[Unit]
+Description=Keep user hicolor index.theme a superset of the system one
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/hicolor-index-sync
+
+[Install]
+WantedBy=default.target

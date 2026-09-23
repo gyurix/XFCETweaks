@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SYS=/usr/share/icons/hicolor/index.theme
+DIR="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor"
+TARGET="$DIR/index.theme"
+
+[[ -f "$SYS" && -d "$DIR" ]] || exit 0
+
+listed=$(sed -n 's/^Directories=//p' "$SYS" | tr ',' '\n')
+extra=()
+for path in "$DIR"/*/*/; do
+    [[ -d "$path" ]] || continue
+    sub=${path%/}
+    sub=${sub#"$DIR"/}
+    grep -qxF "$sub" <<<"$listed" || extra+=("$sub")
+done
+
+tmp=$(mktemp "$DIR/.index.theme.XXXXXX")
+trap 'rm -f "$tmp"' EXIT
+{
+    if ((${#extra[@]})); then
+        joined=$(IFS=,; echo "${extra[*]}")
+        sed "s|^Directories=.*|&,$joined|" "$SYS"
+    else
+        cat "$SYS"
+    fi
+    for sub in "${extra[@]}"; do
+        size=${sub%%/*}
+        context=${sub#*/}
+        printf '\n[%s]\nContext=%s\n' "$sub" "${context^}"
+        if [[ "$size" =~ ^([0-9]+)x[0-9]+$ ]]; then
+            printf 'Size=%s\nType=Fixed\n' "${BASH_REMATCH[1]}"
+        else
+            printf 'Size=48\nMinSize=8\nMaxSize=512\nType=Scalable\n'
+        fi
+    done
+} >"$tmp"
+
+if cmp -s "$tmp" "$TARGET"; then
+    exit 0
+fi
+chmod 0644 "$tmp"
+mv -f "$tmp" "$TARGET"
+gtk-update-icon-cache -f -q -t "$DIR" || true

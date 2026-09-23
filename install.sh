@@ -30,6 +30,7 @@ echo "==> systemd user units"
 mkdir -p "$HOME/.config/systemd/user"
 install -m 0644 "$REPO"/systemd/user/*.service "$HOME/.config/systemd/user/"
 install -m 0644 "$REPO"/systemd/user/*.timer "$HOME/.config/systemd/user/"
+install -m 0644 "$REPO"/systemd/user/*.path "$HOME/.config/systemd/user/"
 for drop in pipewire.service.d pipewire-pulse.service.d wireplumber.service.d; do
     if [[ -d "$REPO/systemd/user/$drop" ]]; then
         mkdir -p "$HOME/.config/systemd/user/$drop"
@@ -41,6 +42,8 @@ systemctl --user enable --now battery-guard.timer
 systemctl --user enable --now audio-output-autoswitch.service
 systemctl --user enable --now mic-quality.service
 systemctl --user enable --now pipewire-rt-guard.service
+systemctl --user enable --now hicolor-index-sync.path
+systemctl --user enable hicolor-index-sync.service
 systemctl --user enable battery-hibernate-countdown.service || true
 
 # Cleanup for machines that had the removed FnLock feature installed.
@@ -64,7 +67,8 @@ fi
 echo "==> xfconf keybindings and power-manager settings"
 "$REPO"/xfconf/apply.sh
 
-echo "==> Refresh icon cache"
+echo "==> Sync hicolor index and refresh icon cache"
+"$HOME/.local/bin/hicolor-index-sync"
 gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
 
 echo "Done."
