@@ -86,7 +86,12 @@ set_control() {
     done
 }
 restore_host() {
-    require_stopped_vm
+    # A running VM with only virtual graphics does not own the PCI device.
+    # Do not require it to stop for host power-policy changes.
+    if has_hostdev "$GPU" || has_hostdev "$AUDIO" ||
+       [[ $(device_driver "$GPU") == vfio-pci || $(device_driver "$AUDIO") == vfio-pci ]]; then
+        require_stopped_vm
+    fi
     # Remove persistent passthrough first, so a later start cannot steal the GPU.
     has_hostdev "$AUDIO" && detach_hostdev "$AUDIO"
     has_hostdev "$GPU" && detach_hostdev "$GPU"
