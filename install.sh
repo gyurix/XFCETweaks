@@ -25,6 +25,8 @@ python3 -m compileall -q "$HOME/.local/bin/osd-badge" "$HOME/.local/libexec" || 
 echo "==> Root helpers -> /usr/local/bin"
 sudo install -m 0755 "$REPO"/sbin/brightness-step /usr/local/bin/brightness-step
 sudo install -m 0755 "$REPO"/sbin/battery-shutdown-countdown /usr/local/bin/battery-shutdown-countdown
+sudo install -m 0755 "$REPO"/sbin/gpu-power /usr/local/bin/gpu-power
+sudo install -m 0440 "$REPO"/sudoers.d/xfcetweaks-gpu /etc/sudoers.d/xfcetweaks-gpu
 
 echo "==> systemd user units"
 mkdir -p "$HOME/.config/systemd/user"

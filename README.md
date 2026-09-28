@@ -183,6 +183,25 @@ ignored by Wine and xfwm4 cancels it on touch).
 
 </details>
 
+### dGPU and Tiny10 VM
+
+`gpu off` leaves the GPU on the host with runtime power management; active
+clients can keep it awake. `gpu host` reserves it for host apps. `gpu vm`
+assigns the RTX 5070 and its audio function exclusively to the stopped
+`tiny10` libvirt VM; it refuses while Xorg or any app holds the card. From
+a text console or SSH, save work and stop `lightdm` before switching. It
+never kills GPU clients. Shut down the VM before switching back, then run
+`gpu host` and start `lightdm`.
+
+`gpu on` gives the GPU to the host while VMs use virtual displays. Linux
+VMs can use VirGL if configured; Tiny10's Windows virtual display is 2D,
+not shared NVIDIA acceleration. Full PCI passthrough is exclusive. `gpu
+status` reports current bindings; `gpu run` pins new host processes.
+
+The stopped `tiny10` VM has 8 GiB RAM, 8 vCPUs, a 96 GiB sparse qcow2 disk,
+UEFI, and a local copy of the USB Tiny10 ISO. Manage it with `virt-manager`
+or `sudo virsh -c qemu:///system start tiny10`.
+
 ### Smart charge
 
 <details>

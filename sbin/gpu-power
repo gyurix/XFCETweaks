@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+# Root-only GPU ownership switch for the two-function NVIDIA IOMMU group.
+set -euo pipefail
+
+GPU=0000:01:00.0
+AUDIO=0000:01:00.1
+VM=tiny10
+SYS=/sys/bus/pci/devices
+VIRSH=(/usr/bin/virsh -c qemu:///system)
+
+die() { echo "gpu-power: $*" >&2; exit 1; }
+device_driver() {
+    local path="$SYS/$1/driver"
+    if [[ -L "$path" ]]; then basename "$(readlink -f "$path")"; else echo none; fi
+}
+require_devices() {
+    [[ -d "$SYS/$GPU" && -d "$SYS/$AUDIO" ]] || die "NVIDIA GPU or audio function is missing"
+    [[ $(<"$SYS/$GPU/vendor") == 0x10de && $(<"$SYS/$GPU/class") == 0x030000 ]] || die "unexpected GPU at $GPU"
+    [[ $(<"$SYS/$AUDIO/vendor") == 0x10de && $(<"$SYS/$AUDIO/class") == 0x040300 ]] || die "unexpected audio function at $AUDIO"
+}
+vm_state() { "${VIRSH[@]}" domstate "$VM" 2>/dev/null || die "libvirt VM '$VM' is not defined"; }
+require_stopped_vm() {
+    [[ $(vm_state) == 'shut off' ]] || die "shut down $VM before switching GPU ownership"
+}
+check_group() {
+    local group path count=0
+    group=$(readlink -f "$SYS/$GPU/iommu_group")
+    [[ -n "$group" && -d "$group" ]] || die "IOMMU group missing; refusing unsafe passthrough"
+    [[ $(readlink -f "$SYS/$AUDIO/iommu_group") == "$group" ]] || die "GPU and audio are in different IOMMU groups"
+    for path in "$group"/devices/*; do
+        case "${path##*/}" in "$GPU"|"$AUDIO") ((count+=1));; *) die "IOMMU group contains another device: ${path##*/}";; esac
+    done
+    [[ $count == 2 ]] || die "incomplete GPU IOMMU group"
+}
+hostdev_xml() {
+    local address=$1 bus=${1:5:2} slot=${1:8:2} function=${1:11:1}
+    printf "<hostdev mode='subsystem' type='pci' managed='yes'><source><address domain='0x0000' bus='0x%s' slot='0x%s' function='0x%s'/></source></hostdev>\n" "$bus" "$slot" "$function"
+}
+has_hostdev() {
+    local address=$1 match
+    match=$("${VIRSH[@]}" dumpxml --inactive "$VM" --xpath "//devices/hostdev/source/address[@bus='0x${address:5:2}' and @slot='0x${address:8:2}' and @function='0x${address:11:1}']")
+    [[ -n "$match" ]]
+}
+attach_hostdev() {
+    local xml
+    xml=$(hostdev_xml "$1")
+    "${VIRSH[@]}" attach-device "$VM" /dev/stdin --config <<< "$xml" >/dev/null
+}
+detach_hostdev() {
+    local xml
+    xml=$(hostdev_xml "$1")
+    "${VIRSH[@]}" detach-device "$VM" /dev/stdin --config <<< "$xml" >/dev/null
+}
+client_pids() {
+    local node path
+    for node in /dev/nvidia0 /dev/nvidiactl /dev/nvidia-uvm; do
+        [[ -e "$node" ]] && /usr/bin/fuser "$node" 2>/dev/null || true
+    done
+    for path in "$SYS/$GPU"/drm/*; do
+        [[ -e "/dev/dri/${path##*/}" ]] && /usr/bin/fuser "/dev/dri/${path##*/}" 2>/dev/null || true
+    done
+}
+ensure_idle() {
+    local pids persistence
+    persistence=$(/usr/bin/systemctl show -P MainPID nvidia-persistenced.service)
+    pids=$(client_pids | tr ' ' '\n' | sort -un | awk -v skip="${persistence:-0}" 'length && $0 != skip { printf "%s ", $0 }')
+    [[ -z "$pids" ]] || die "GPU still open by PID(s) $pids; close apps and log out of Xorg. Nothing was detached"
+}
+detach_to_vfio() {
+    local address=$1
+    [[ $(device_driver "$address") == vfio-pci ]] && return
+    "${VIRSH[@]}" nodedev-detach "pci_${address//[:.]/_}" >/dev/null
+    [[ $(device_driver "$address") == vfio-pci ]] || die "$address did not bind vfio-pci"
+}
+reattach_to_host() {
+    local address=$1
+    [[ $(device_driver "$address") != vfio-pci ]] && return
+    "${VIRSH[@]}" nodedev-reattach "pci_${address//[:.]/_}" >/dev/null
+    [[ $(device_driver "$address") != vfio-pci ]] || die "$address is still bound to vfio-pci"
+}
+set_control() {
+    local address
+    for address in "$GPU" "$AUDIO"; do
+        [[ -w "$SYS/$address/power/control" ]] || die "$address power control unavailable"
+        echo "$1" > "$SYS/$address/power/control"
+    done
+}
+restore_host() {
+    require_stopped_vm
+    # Remove persistent passthrough first, so a later start cannot steal the GPU.
+    has_hostdev "$AUDIO" && detach_hostdev "$AUDIO"
+    has_hostdev "$GPU" && detach_hostdev "$GPU"
+    reattach_to_host "$GPU"
+    reattach_to_host "$AUDIO"
+    /usr/sbin/modprobe nvidia
+    /usr/sbin/modprobe nvidia_modeset
+    /usr/sbin/modprobe nvidia_drm
+    [[ $(device_driver "$GPU") == nvidia ]] || die "NVIDIA host driver did not reclaim $GPU"
+}
+
+[[ $# == 1 ]] || die "usage: gpu-power {vm|host|on|off|auto|power-state}"
+require_devices
+case "$1" in
+    vm)
+        require_stopped_vm
+        check_group
+        [[ $(device_driver "$GPU") == vfio-pci ]] || {
+            ensure_idle
+            /usr/bin/systemctl stop nvidia-persistenced.service
+            ensure_idle
+        }
+        detach_to_vfio "$AUDIO"
+        detach_to_vfio "$GPU"
+        has_hostdev "$GPU" || attach_hostdev "$GPU" || die "could not attach GPU to $VM; run 'gpu host' to recover"
+        has_hostdev "$AUDIO" || attach_hostdev "$AUDIO" || die "could not attach audio to $VM; run 'gpu host' to recover"
+        echo "GPU assigned exclusively to $VM; start it with: sudo virsh -c qemu:///system start $VM"
+        ;;
+    host|on|auto)
+        restore_host
+        set_control on
+        /usr/bin/systemctl start nvidia-persistenced.service
+        echo "GPU owned by host; $VM uses its virtual display"
+        ;;
+    off)
+        restore_host
+        /usr/bin/systemctl stop nvidia-persistenced.service
+        set_control auto
+        echo "GPU runtime power management enabled; active clients may keep it awake"
+        ;;
+    power-state)
+        printf 'GPU driver: %s; audio driver: %s; VM: %s\n' "$(device_driver "$GPU")" "$(device_driver "$AUDIO")" "$(vm_state)"
+        for address in "$GPU" "$AUDIO"; do
+            printf '%s: ' "$address"
+            cat "$SYS/$address/power/runtime_status" "$SYS/$address/power/control" | tr '\n' ' '
+            echo
+        done
+        ;;
+    *) die "usage: gpu-power {vm|host|on|off|auto|power-state}";;
+esac

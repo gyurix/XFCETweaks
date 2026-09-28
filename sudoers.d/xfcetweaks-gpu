@@ -1,0 +1,2 @@
+# GPU helper accepts only its built-in ownership/power commands.
+%sudo ALL=(root) NOPASSWD: /usr/local/bin/gpu-power *
