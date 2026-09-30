@@ -1,43 +1,49 @@
 # XFCETweaks
 
-Custom XFCE keybinding scripts and OSD notifications for Linux Mint 22.x /
-XFCE 4.18 (X11). No secrets in this repo.
+Make XFCE feel finished. Clean on-screen feedback for every hardware key,
+audio that goes where you expect, screenshots that catch open menus, and a
+laptop that won't die in the middle of your work.
 
-## Features
+Built for Linux Mint 22 / XFCE 4.18 on X11. One command to install.
 
-| | Feature | What it does |
+## Highlights
+
+| | Feature | What you get |
 |---|---|---|
-| ![brightness](screenshots/osd-brightness.png) | [Brightness](#brightness) | 20 perceptual backlight levels, `12/20` OSD |
-| ![volume](screenshots/osd-volume.png) | [Volume](#volume) | Lag-free PipeWire HUD with overdrive bar |
-| ![mic](screenshots/feat-mic-muted.png) | [Microphone](#microphone) | One-key mute toggle with OSD |
-| ![screenshot](screenshots/feat-screenshot.png) | [Screenshots](#screenshots) | Freeze-frame region capture, menus stay open |
-| ![charger](screenshots/osd-charger.png) | [Charger & battery](#charger--battery-guard) | Plug alerts + hibernate countdown that pauses media |
-| ![headset](screenshots/feat-headphones.png) | [Headphone auto-switch](#headphone-auto-switch) | Plug/unplug routing without speaker blips |
-| ![mic-live](screenshots/feat-mic-live.png) | [Mic quality guard](#mic-quality-guard) | Pinned levels, clean filter feed |
-| ![battery](screenshots/osd-battery.png) | [Realtime audio](#realtime-audio-priority) | Stutter-free PipeWire under load |
-| | [dGPU control](#dgpu-control) | `gpu on/off/auto` + per-launch pinning |
-| | [Hibernate](#hibernate) | `hibernate` with preflight checks + one-shot setup |
-| | [Show-desktop](#show-desktop) | Minimizes even Wine windows |
-| | [Fullscreen zoom](#fullscreen-zoom) | Super+plus/minus magnifier |
-| | [Smart charge](#smart-charge) | Conservation-mode helper |
-| | [OSD badges](#osd-badge-engine) | Cached icon engine behind every HUD |
-| | [Icon theme guard](#icon-theme-guard) | Stops missing system icons (start menu, apps) |
-| | [Terminal fonts](#terminal-fonts) | Braille + shape fallbacks so opencode spinners never show tofu |
+| ![brightness](screenshots/osd-brightness.png) | [Brightness](#brightness) | 20 smooth steps, fine control in the dark |
+| ![volume](screenshots/osd-volume.png) | [Volume](#volume) | Instant response, boost up to 200% |
+| ![mic](screenshots/feat-mic-muted.png) | [Microphone](#microphone) | One key to mute, clear on-screen status |
+| ![screenshot](screenshots/feat-screenshot.png) | [Screenshots](#screenshots) | Freeze the screen, crop, done: menus included |
+| ![charger](screenshots/osd-charger.png) | [Charger alerts](#charger-alerts) | Instant plug/unplug badge with exact charge |
+| ![countdown](screenshots/feat-countdown.png) | [Low-battery rescue](#low-battery-rescue) | Full-screen warning, media paused, safe hibernate |
+| ![headset](screenshots/feat-headphones.png) | [Headphone auto-switch](#headphone-auto-switch) | Sound follows your headset, never blasts the speakers |
+| ![mic-live](screenshots/feat-mic-live.png) | [Mic quality guard](#mic-quality-guard) | Consistent, clean voice in every call |
+| | [Realtime audio](#realtime-audio) | No crackles when the machine is busy |
+| | [Fullscreen zoom](#fullscreen-zoom) | Super+plus / Super+minus magnifier |
+| | [GPU control](#gpu-control) | Save battery or hand the NVIDIA GPU to a VM |
+| | [Hibernate](#hibernate) | Checked, one-command hibernation |
+| | [Smart charge](#smart-charge) | Longer battery life when plugged in all day |
+| | [Show desktop](#show-desktop) | Works with every window, Wine apps included |
+| | [Icon theme guard](#icon-theme-guard) | Start menu and app icons never go missing |
+| | [Terminal fonts](#terminal-fonts) | Spinners and symbols render, no empty boxes |
+
+## On-screen displays
 
 ### Brightness
 
 ![brightness OSD](screenshots/osd-brightness.png)
 
-<details>
-<summary>Read more</summary>
+Twenty evenly spaced steps that look even to the eye: tiny adjustments at
+night, quick jumps in daylight. The display shows the step (`12/20`)
+instead of a misleading hardware percentage.
 
-`XF86MonBrightnessUp/Down` (`sbin/brightness-step`) step through 20 stops
-tuned for the panel
-(`1 2 3 5 8 13 21 34 47 70 101 142 193 253 324 403 492 589 693 800` at
-max 800): exponential at the dark end, blended toward linear at the top so
-jumps stay small. The OSD shows the preset number (`12/20`) with an even
-bar instead of a misleading linear hardware percentage. Other `max`
-values are auto-scaled.
+<details>
+<summary>How it works</summary>
+
+`sbin/brightness-step` handles `XF86MonBrightnessUp/Down` with stops tuned
+for the panel (`1 2 3 5 8 13 21 34 47 70 101 142 193 253 324 403 492 589
+693 800` at max 800): exponential at the dark end, close to linear at the
+top. Panels with a different maximum are scaled automatically.
 
 </details>
 
@@ -47,12 +53,15 @@ values are auto-scaled.
 ![volume low](screenshots/osd-volume-low.png)
 ![volume muted](screenshots/osd-volume-muted.png)
 
-<details>
-<summary>Read more</summary>
+Volume keys react immediately, even when held down, with a badge showing
+the exact level. Need more? Go past 100% up to 200%.
 
-`XF86Audio*` keys (`bin/xfce-pipewire-volume`) drive PipeWire via a single
-`wpctl` roundtrip per press (no lag on key repeat), with an icon-only
-badge (glyph + exact percent + bar, up to 200% overdrive).
+<details>
+<summary>How it works</summary>
+
+`bin/xfce-pipewire-volume` makes one `wpctl` call per key press, so key
+repeat never lags. The badge combines the icon, exact percent and a bar
+with an overdrive section.
 
 </details>
 
@@ -61,261 +70,272 @@ badge (glyph + exact percent + bar, up to 200% overdrive).
 ![mic muted](screenshots/feat-mic-muted.png)
 ![mic live](screenshots/feat-mic-live.png)
 
-<details>
-<summary>Read more</summary>
+One key mutes or unmutes your microphone, and a clear badge tells you
+which state you're in.
 
-`bin/mic-toggle` flips the default source mute and shows a muted/unmuted
+<details>
+<summary>How it works</summary>
+
+`bin/mic-toggle` flips the default source's mute and shows the matching
 notification.
 
 </details>
 
-### Screenshots
+## Screenshots
 
 ![screenshot](screenshots/feat-screenshot.png)
 
+Press `Print` and the screen freezes, so right-click menus and tooltips
+stay exactly where they were. Drag to crop, and the image is on your
+clipboard.
+
+| Shortcut | Captures |
+| --- | --- |
+| `Print` | A region you select |
+| `Shift+Print` | The whole screen |
+| `Alt+Print` | The active window |
+| `Ctrl+Print` | A region after 5 seconds, so you can open a menu first |
+
 <details>
-<summary>Read more</summary>
+<summary>How it works</summary>
 
-`Print` (`bin/rect-screenshot-clipboard` + `libexec/screenshot-cropper`)
-freezes the screen first, so open (context) menus stay visible, then crops
-on the frozen image:
+`bin/rect-screenshot-clipboard` captures the screen in-process through GDK
+(falling back to ImageMagick `import`), then `libexec/screenshot-cropper`
+crops on the frozen image while grabbing keyboard and pointer, so no app
+reacts to the key press. A second `Print` while cropping is ignored. The
+result stays on the clipboard through a small GTK owner process. The
+delay for `Ctrl+Print` is set with `$SCREENSHOT_MENU_DELAY`.
 
-- keyboard + pointer grab while cropping, so no other app processes the
-  Print keypress and menus stay open;
-- single-instance lock — a second Print press exits silently instead of
-  stacking cropper windows;
-- in-process GDK root capture (`--grab`) instead of forking ImageMagick,
-  with automatic fallback to `import` (exit code 3 = capture failed).
-
-Modes: `region` (default, `Print`), `full` (`Shift+Print`),
-`menu` (`Ctrl+Print`: notifies, waits `$SCREENSHOT_MENU_DELAY`, default
-5 s, so a menu can be reopened, then captures *and crops* like region),
-`window` (`Alt+Print`).
-Results land in the clipboard via a small GTK owner process.
-
-> Firefox note: Firefox/XUL context menus hide on the Print keypress
-> itself — the open menu owns the X grab, so the key reaches Firefox
-> before this script runs, and no screenshot tool can freeze it in time
-> (Discord/Electron menus ignore the key, which is why they capture
-> fine). For Firefox menus use `Ctrl+Print`: press it, right-click to
-> reopen the menu during the delay, then select the area.
+Firefox closes its own context menus the moment `Print` is pressed,
+before any screenshot tool can run. For Firefox menus use `Ctrl+Print`,
+reopen the menu during the delay, then select the area.
 
 </details>
 
-### Charger & battery guard
+## Battery and power
+
+### Charger alerts
 
 ![charger plugged](screenshots/osd-charger.png)
 ![on battery](screenshots/osd-battery.png)
 
-<details>
-<summary>Read more</summary>
+Plug in or unplug and a badge with the exact charge appears within about
+a second. A loose jack flickering on and off won't spam you.
 
-`charger-watch.service` (`bin/charger-watch`) listens to udev
-`power_supply` events and runs `bin/battery-guard` the moment the charger
-is plugged or unplugged, with the 30 s timer kept as a safety net. The guard reads the AC/USB-C mains
-`online` flag as source of truth (not the battery `status`, which flips
-through `Not charging`/`Full`/conservation states), debounces EC flaps,
-and notifies charger plug/unplug with charge badges. At ≤18% on battery
-a fullscreen **plug-in-charger countdown**
-(`sbin/battery-shutdown-countdown`) to hibernation appears; it also exits
-early on charger plug via a sysfs cross-check when UPower lags. While the
-countdown is up it pauses MPRIS players (Firefox, Spotify, …) over D-Bus,
-and resumes exactly the players it paused when the charger is plugged
-in — never on the hibernate path. Test mode (`--test`) skips media
-handling.
+<details>
+<summary>How it works</summary>
+
+`charger-watch.service` (`bin/charger-watch`) listens to kernel
+`power_supply` events and runs `bin/battery-guard` right away, with a 30 s
+timer as a safety net. The charger's `online` flag is the source of
+truth, not the battery status, which also changes for "Full" or
+conservation mode. A 1 s re-check filters out flapping. Badges are drawn
+by `bin/osd-badge` and cached per percent.
 
 </details>
 
-### Headphone auto-switch
+### Low-battery rescue
 
-![headset](screenshots/feat-headphones.png)
+![plug in charger countdown](screenshots/feat-countdown.png)
 
-<details>
-<summary>Read more</summary>
-
-`bin/audio-output-autoswitch` keeps the default sink and existing streams
-on the connected headset. Fixes two races in naive switchers: the default
-is set via WirePlumber *before* moving existing streams (so new streams
-can't briefly play through the speakers), and during Bluetooth
-profile/codec renegotiation — when the sink briefly disappears while the
-headset stays connected — playback is *not* bounced to the speakers.
-Wired plug/unplug is handled through the ALSA fallback. Runs as
-`audio-output-autoswitch.service`, reacting to `pactl subscribe`
-sink/sink-input events.
-
-Configure your headset in `~/.config/XFCETweaks/audio.conf`
-(`HEADSET_ADDRESS` + `HEADSET_TOKEN`, see `config/audio.conf.example`);
-with empty values only the wired path is active.
-
-</details>
-
-### Mic quality guard
+At 18% on battery, a full-screen countdown asks you to plug in. Your music
+and videos pause so you hear the warning. Plug in and everything resumes
+where it was; don't, and the laptop hibernates safely instead of dying.
 
 <details>
-<summary>Read more</summary>
+<summary>How it works</summary>
 
-`bin/mic-quality-setup` (`mic-quality.service --watch`) pins mic levels
-(boosts off, capture 50%), keeps the `voice_clear` filter fed by the real
-microphone only, and routes app recordings to it.
-
-</details>
-
-### Realtime audio priority
-
-<details>
-<summary>Read more</summary>
-
-`bin/pipewire-rt-guard` (`pipewire-rt-guard.service`) plus the
-`systemd/user/{pipewire,pipewire-pulse,wireplumber}.service.d/` drop-ins
-give PipeWire data loops realtime priority so audio never stutters under
-load.
-
-</details>
-
-### Show-desktop
-
-<details>
-<summary>Read more</summary>
-
-`bin/toggle-desktop` implements show-desktop window-by-window, so Wine
-windows (Mailbird) minimize and restore correctly (the EWMH broadcast is
-ignored by Wine and xfwm4 cancels it on touch).
-
-</details>
-
-### Fullscreen zoom
-
-<details>
-<summary>Read more</summary>
-
-`bin/xfwm-fullscreen-zoom` — Super+plus/minus magnifier (`Super+=`,
-`Super+-`, `Super+KP_Add/KP_Subtract`) on top of the xfwm4 compositor zoom.
-xfwm4 only zooms on wheel clicks whose modifiers are *exactly* its
-`easy_click` modifier (Alt by default), so the helper swaps the held
-Super for `easy_click`, injects `ZOOM_STEPS` (default 3, each 1/16 of the
-scale) wheel clicks, waits for xfwm4's sync pointer grab to consume each
-one, then restores Super if it is still physically held — while a wheel
-button is down, so xcape's Super-tap (Whisker menu) doesn't fire. One
-Python process over XTest (~100 ms under load vs. 400+ ms for the old
-xdotool pair).
-
-</details>
-
-### dGPU control
-
-<details>
-<summary>Read more</summary>
-
-`bin/gpu` + `sbin/gpu-power` manage the RTX 5070 Laptop GPU on this host:
-
-- `gpu off` — keep the dGPU on the host but allow runtime suspension when idle;
-  new launches prefer the Intel iGPU. Existing dGPU clients remain active.
-- `gpu host` — host-only, powered-on dGPU for host apps.
-- `gpu vm` — exclusive PCI passthrough of GPU and HDMI audio to the stopped
-  `tiny10` libvirt VM. Refuses while Xorg or other processes use the GPU;
-  switch from a text console or SSH and stop `lightdm` after saving work.
-  Never kills clients itself.
-- `gpu on` — host owns the dGPU, VMs keep their virtual display. For Linux
-  VMs, VirtIO-GPU/VirGL can share host 3D rendering if configured separately;
-  Tiny10's current Windows VirtIO GPU driver lacks stable VirGL 3D support,
-  so its QXL virtual display is 2D in this mode.
-- `gpu auto` — alias for `gpu off`.
-- `gpu status` — mode, PCI power state, draw, dGPU clients.
-- `gpu run [--dgpu|--igpu] -- <cmd>` — launch pinned to a GPU.
-
-`tiny10` is a libvirt system VM with an 8 GiB RAM/8 vCPU definition,
-96 GiB sparse qcow2 disk, UEFI, and a verified local copy of the USB Tiny10
-ISO. Open it with `virt-manager` (do not launch the GUI automatically), or
-`sudo virsh -c qemu:///system start tiny10`. For NVIDIA acceleration run
-`gpu vm` first, after stopping `lightdm` from a text console or SSH.
-When done with passthrough, shut down the VM, run `gpu host`, then start
-`lightdm`. A VM using only its virtual display may stay running when switching
-between `gpu host`, `gpu on`, and `gpu off`. PCI passthrough is exclusive: it cannot
-share the physical NVIDIA device with host apps. No mode migrates live
-GL/Vulkan/CUDA contexts or force-closes processes.
+`sbin/battery-shutdown-countdown` runs as
+`battery-hibernate-countdown.service`, started by `battery-guard`. It
+reacts to UPower signals and kernel events, so plugging in dismisses it
+instantly even when UPower lags. It pauses MPRIS players (Firefox,
+Spotify, …) over D-Bus and resumes only the ones it paused, and only when
+the charger comes back. It falls back to suspend when hibernation isn't
+available. Try it safely with
+`BATTERY_COUNTDOWN_SECONDS=3 battery-shutdown-countdown --test`.
 
 </details>
 
 ### Hibernate
 
-<details>
-<summary>Read more</summary>
-
-`bin/hibernate` hibernates the machine after preflight checks (swap ≥ RAM,
-`resume=` kernel parameter, kernel hibernate support, Secure Boot off,
-NVIDIA VRAM preservation). One-time setup (latest HWE kernel, btrfs-safe
-swapfile, GRUB `resume=UUID`/`resume_offset=`, initramfs, NVIDIA PM
-options, systemd hibernate policy):
+Save everything to disk and power off, with checks up front so it doesn't
+fail halfway.
 
 ```sh
-sudo hibernate-setup --kernel
+sudo hibernate-setup --kernel   # one-time setup
 # reboot, then:
 hibernate --check && hibernate
 ```
+
+<details>
+<summary>How it works</summary>
+
+`bin/hibernate` checks swap size, the `resume=` kernel parameter, kernel
+support, Secure Boot and NVIDIA video-memory preservation before
+hibernating. `sbin/hibernate-setup` does the one-time work: latest HWE
+kernel, a btrfs-safe swapfile, GRUB `resume=UUID` / `resume_offset=`,
+initramfs, NVIDIA power options (`modprobe/`) and the systemd sleep policy
+(`sleep.conf.d/`).
+
+</details>
+
+### GPU control
+
+Keep the NVIDIA GPU asleep for longer battery life, pin a single app to
+it, or hand it to a virtual machine.
+
+| Command | Result |
+| --- | --- |
+| `gpu off` / `gpu auto` | GPU sleeps when idle, new apps use the Intel GPU |
+| `gpu host` | GPU always on, for host apps only |
+| `gpu on` | GPU on for the host, VMs keep their virtual display |
+| `gpu vm` | Full GPU passthrough to the `tiny10` VM |
+| `gpu run --dgpu -- <cmd>` | Launch one app on a chosen GPU (`--igpu` too) |
+| `gpu status` | Current mode, power state, power draw, apps using it |
+
+<details>
+<summary>How it works</summary>
+
+`bin/gpu` and `sbin/gpu-power` manage the RTX 5070 Laptop GPU. No mode
+kills running apps or moves live GL/Vulkan/CUDA work; `gpu vm` refuses
+while Xorg or anything else uses the GPU.
+
+- **Passthrough (`gpu vm`)** gives the GPU and its HDMI audio exclusively
+  to the stopped `tiny10` libvirt VM. Switch from a text console or SSH
+  with `lightdm` stopped. When done, shut down the VM, run `gpu host`,
+  then start `lightdm`.
+- **Virtual display** VMs can keep running while you switch between
+  `gpu host`, `gpu on` and `gpu off`. Linux VMs can share host 3D through
+  VirtIO-GPU/VirGL; Tiny10's Windows driver lacks stable VirGL, so its
+  display is 2D.
+- **`tiny10`** is a UEFI libvirt VM with 8 GiB RAM, 8 vCPUs and a 96 GiB
+  sparse disk. Start it from `virt-manager` or with
+  `sudo virsh -c qemu:///system start tiny10`.
 
 </details>
 
 ### Smart charge
 
-<details>
-<summary>Read more</summary>
+Plugged in all day? Cap charging to protect the battery.
+`smart-charge on | off | toggle | status` switches Lenovo conservation
+mode.
 
-`bin/smart-charge` — Lenovo conservation-mode helper
-(`on`/`off`/`toggle`/`status`).
+## Audio
+
+### Headphone auto-switch
+
+![headset](screenshots/feat-headphones.png)
+
+Connect your headset and all sound moves to it, including what's already
+playing. Nothing leaks through the speakers while it switches, and a
+brief Bluetooth hiccup doesn't send your call to the room.
+
+<details>
+<summary>How it works</summary>
+
+`bin/audio-output-autoswitch` (`audio-output-autoswitch.service`) follows
+`pactl subscribe` events. It sets the new default through WirePlumber
+before moving existing streams, so new sounds can't slip out of the
+speakers, and it ignores the short sink drop during Bluetooth codec
+renegotiation. Wired headphones work through the ALSA fallback.
+
+Set your Bluetooth headset in `~/.config/XFCETweaks/audio.conf`
+(`HEADSET_ADDRESS`, `HEADSET_TOKEN`; see `config/audio.conf.example`).
+With empty values, only wired switching is active.
 
 </details>
 
-### OSD badge engine
+### Mic quality guard
+
+Your voice sounds the same in every call: levels stay fixed, and apps
+record through a clean voice filter.
 
 <details>
-<summary>Read more</summary>
+<summary>How it works</summary>
 
-`bin/osd-badge` generates and caches every HUD badge icon (glyph + text),
-rebuilding `icon-theme.cache` whenever a new icon name appears so
-notifications never show a broken icon.
+`bin/mic-quality-setup` (`mic-quality.service --watch`) turns boosts off,
+holds capture at 50%, feeds the `voice_clear` filter from the real
+microphone only, and routes app recordings to it.
+
+</details>
+
+### Realtime audio
+
+No crackles or dropouts when compiling, gaming or running VMs.
+
+<details>
+<summary>How it works</summary>
+
+`bin/pipewire-rt-guard` (`pipewire-rt-guard.service`) and the drop-ins in
+`systemd/user/{pipewire,pipewire-pulse,wireplumber}.service.d/` give
+PipeWire's audio threads realtime priority.
+
+</details>
+
+## Desktop
+
+### Fullscreen zoom
+
+Hold Super and press plus or minus (`=`, `-`, or the numpad keys) to zoom
+the whole screen around the pointer.
+
+<details>
+<summary>How it works</summary>
+
+`bin/xfwm-fullscreen-zoom` drives the xfwm4 compositor zoom, which only
+reacts to scroll clicks with its `easy_click` modifier (Alt by default)
+held. The helper briefly swaps Super for that modifier, sends the clicks,
+waits for xfwm4 to take each one, and puts Super back, without triggering
+an xcape Super-tap. A press takes about 100 ms. `ZOOM_STEPS` (default 3)
+sets how far each press zooms.
+
+</details>
+
+### Show desktop
+
+`Super+D` minimizes every window and brings them all back, including Wine
+apps like Mailbird that ignore XFCE's built-in version.
+
+<details>
+<summary>How it works</summary>
+
+`bin/toggle-desktop` minimizes and restores window by window instead of
+using the EWMH show-desktop request, which Wine ignores and xfwm4 cancels
+as soon as a window is touched.
 
 </details>
 
 ### Icon theme guard
 
+Start menu and app icons stay put, even after installers or Wine drop
+icons into your home folder.
+
 <details>
-<summary>Read more</summary>
+<summary>How it works</summary>
 
-GTK reads the directory list of `hicolor` from the first `index.theme` it
-finds, and `~/.local/share/icons/hicolor/index.theme` wins over the system
-one. A minimal user copy (needed for `gtk-update-icon-cache`) hides every
-system `hicolor` directory it omits, e.g. `scalable/apps` holding the Mint
-start-menu icon.
-
-| Trigger | Action |
-| --- | --- |
-| Login | `hicolor-index-sync.service` runs once |
-| User or system `index.theme` rewritten | `hicolor-index-sync.path` reruns it |
-
-`bin/hicolor-index-sync` rewrites the user file as the system
-`index.theme` plus sections for user-only size directories (Wine, app
-installers), then rebuilds `icon-theme.cache`. Unchanged content is not
-rewritten, so the path unit does not loop.
+GTK takes the `hicolor` directory list from the first `index.theme` it
+finds, and a minimal copy in `~/.local/share/icons/hicolor/` hides every
+system directory it leaves out (such as the Mint start-menu icon).
+`bin/hicolor-index-sync` rewrites the user copy as the system one plus
+any user-only directories, then rebuilds the icon cache. It runs at login
+(`hicolor-index-sync.service`) and whenever either file changes
+(`hicolor-index-sync.path`).
 
 </details>
 
 ### Terminal fonts
 
+Braille spinners and geometric symbols, like the ones opencode uses,
+render in the terminal instead of empty boxes.
+
 <details>
-<summary>Read more</summary>
+<summary>How it works</summary>
 
-opencode's loading animation is a braille spinner (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`,
-U+2800–U+28FF) and its prompt scanner uses `⬥◆⬩⬪·■⬝` (U+2B25/U+2B29/
-U+2B2A/U+2B1D have zero coverage in stock mono fonts — no installed
-monospace font covers braille either, so terminals show tofu boxes).
-
-`install.sh` installs `fonts-symbola fonts-noto-extra
-fonts-jetbrains-mono`, drops `config/fontconfig/
-10-xfcetweaks-terminal-fallback.conf` into
-`~/.config/fontconfig/conf.d/` (monospace → JetBrains Mono + Symbola /
-Noto Sans Symbols2 / DejaVu Sans fallback), and seeds
-`~/.config/ghostty/config` with the same fallbacks when missing.
-Restart Ghostty after install so it picks up the new fonts.
+`install.sh` installs Symbola, Noto Extra and JetBrains Mono, adds
+`config/fontconfig/10-xfcetweaks-terminal-fallback.conf` (monospace →
+JetBrains Mono, then Symbola / Noto Sans Symbols2 / DejaVu Sans), and
+seeds `~/.config/ghostty/config` with the same fallbacks if you don't
+have one. Restart Ghostty afterwards.
 
 </details>
 
@@ -327,44 +347,36 @@ cd XFCETweaks
 ./install.sh
 ```
 
-`install.sh` installs packages (`xdotool wmctrl x11-utils imagemagick
-libnotify-bin python3-gi python3-pil python3-dbus adwaita-icon-theme
-fonts-dejavu fonts-symbola fonts-noto-extra fonts-jetbrains-mono
-xfce4-power-manager upower pipewire-pulse wireplumber`),
-copies `bin/` → `~/.local/bin`, `libexec/` → `~/.local/libexec`,
-`sbin/` → `/usr/local/bin` (sudo), enables the user units, applies
-keybindings via `xfconf/apply.sh`, and refreshes the icon cache. Set
-`SKIP_APT=1` to skip the apt step.
+The installer adds the needed packages (set `SKIP_APT=1` to skip that
+step), copies the scripts into place, enables the background services and
+sets up the keyboard shortcuts. It's safe to re-run.
 
-Requirements and notes:
+Requirements:
 
-- X11 session (uses `xdotool`, `xprop`, `wmctrl`, GDK X11 grabs).
-- Brightness needs a sysfs backlight (here `nvidia_wmi_ec_backlight`,
-  max 800 — other max values are auto-scaled) plus
-  `xfpm-power-backlight-helper` from `xfce4-power-manager`.
-- The hibernate countdown and `hibernate` call `sudo -n systemctl
-  hibernate`; `install.sh` allows that (plus the GPU/power helpers)
-  passwordless via `sudoers.d/xfcetweaks-helpers`.
-- Log out/in after install if keybindings lag.
+- An X11 session of XFCE 4.18 with compositing on (the default).
+- A sysfs backlight for the brightness steps (tuned on
+  `nvidia_wmi_ec_backlight`).
+- `sudo` access. The installer allows passwordless `sudo` only for the
+  bundled helpers and `systemctl hibernate` / `suspend`, via
+  `sudoers.d/xfcetweaks-helpers`.
 
-## Layout
+Log out and back in if a shortcut doesn't respond right away.
+
+## What's inside
 
 ```
-bin/            user keybinding scripts (~/.local/bin)
-libexec/        screenshot cropper + clipboard owner (~/.local/libexec)
-sbin/           root helpers: brightness-step, battery-shutdown-countdown,
-                gpu-power, hibernate-setup
-systemd/user/   battery, charger-watch, audio, mic and rt-priority units + PipeWire drop-ins
-modprobe/       NVIDIA VRAM-preserve + D3cold PM options
-sleep.conf.d/   systemd hibernation policy
-sudoers.d/      passwordless sudo for the bundled helpers only
-config/         audio.conf.example (headset address for auto-switch)
-                fontconfig/ terminal monospace fallbacks (opencode spinners)
-                ghostty/ font fallbacks for Ghostty
-xfconf/         apply.sh + reference dumps of current settings
-screenshots/    OSD badge samples used above
+bin/            user scripts            → ~/.local/bin
+libexec/        screenshot helpers      → ~/.local/libexec
+sbin/           root helpers            → /usr/local/bin
+systemd/user/   background services and PipeWire tweaks
+xfconf/         keyboard shortcuts and power-manager settings
+modprobe/       NVIDIA power options
+sleep.conf.d/   hibernation policy
+sudoers.d/      passwordless sudo for the bundled helpers
+config/         audio, fontconfig and Ghostty examples
+screenshots/    images used in this README
 ```
 
 ## License
 
-MIT — see LICENSE.
+MIT, see [LICENSE](LICENSE).

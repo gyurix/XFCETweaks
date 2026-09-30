@@ -10,8 +10,10 @@ if [[ "${SKIP_APT:-0}" != "1" ]]; then
     sudo apt-get update
     sudo apt-get install -y \
         xdotool wmctrl x11-utils imagemagick libnotify-bin \
-        python3-gi python3-pil python3-dbus \
+        python3-gi python3-gi-cairo python3-pil python3-dbus \
+        libxtst6 libxi6 \
         adwaita-icon-theme fonts-dejavu \
+        fonts-symbola fonts-noto-extra fonts-jetbrains-mono \
         xfce4-power-manager xfce4-notifyd upower \
         pipewire-pulse wireplumber
 fi
