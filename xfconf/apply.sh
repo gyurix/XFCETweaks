@@ -28,6 +28,11 @@ for key in "<Super>minus" "<Super>KP_Subtract" "<Super><Shift>minus"; do
 done
 xfconf-query -c xfce4-keyboard-shortcuts -p /commands/custom/override -n -t bool -s true
 
+# xfwm-fullscreen-zoom drives the compositor zoom; pin it on instead of
+# relying on xfwm4 defaults. easy_click is read live, so it is left alone.
+xfconf-query -c xfwm4 -p /general/use_compositing -n -t bool -s true
+xfconf-query -c xfwm4 -p /general/zoom_desktop -n -t bool -s true
+
 # Power manager: brightness keys handled by brightness-step, not internally.
 xfconf-query -c xfce4-power-manager -p /xfce4-power-manager/handle-brightness-keys -n -t bool -s false
 xfconf-query -c xfce4-power-manager -p /xfce4-power-manager/show-brightness-popup -n -t bool -s false

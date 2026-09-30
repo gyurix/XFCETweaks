@@ -179,7 +179,16 @@ ignored by Wine and xfwm4 cancels it on touch).
 <details>
 <summary>Read more</summary>
 
-`bin/xfwm-fullscreen-zoom` — Super+plus/minus magnifier.
+`bin/xfwm-fullscreen-zoom` — Super+plus/minus magnifier (`Super+=`,
+`Super+-`, `Super+KP_Add/KP_Subtract`) on top of the xfwm4 compositor zoom.
+xfwm4 only zooms on wheel clicks whose modifiers are *exactly* its
+`easy_click` modifier (Alt by default), so the helper swaps the held
+Super for `easy_click`, injects `ZOOM_STEPS` (default 3, each 1/16 of the
+scale) wheel clicks, waits for xfwm4's sync pointer grab to consume each
+one, then restores Super if it is still physically held — while a wheel
+button is down, so xcape's Super-tap (Whisker menu) doesn't fire. One
+Python process over XTest (~100 ms under load vs. 400+ ms for the old
+xdotool pair).
 
 </details>
 
