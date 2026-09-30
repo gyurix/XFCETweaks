@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# hibernate - hibernate this machine (suspend-to-disk) with preflight checks.
+#
+#   hibernate           run preflight checks, then systemctl hibernate
+#   hibernate --check   preflight checks only (exit 0 = hibernate should work)
+#   hibernate --setup   install swap + resume= config via hibernate-setup,
+#                       then re-check
+#
+# First-time setup needs: latest HWE kernel, a swapfile >= RAM, and the
+# resume=UUID/resume_offset= kernel parameters. `hibernate --setup` does
+# all of it (reboot afterwards to activate the kernel parameters).
+set -euo pipefail
+
+SETUP_HELPER="/usr/local/bin/hibernate-setup"
+
+fail=0
+warn() { echo "hibernate: $*" >&2; }
+
+check_swap() {
+    local total avail
+    total="$(awk '/^SwapTotal:/ {print $2}' /proc/meminfo)"
+    if [[ -z "$total" || "$total" -le 0 ]]; then
+        warn "no swap active - hibernate needs swap >= RAM (run: hibernate --setup)"
+        return 1
+    fi
+    local mem
+    mem="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)"
+    avail="$(awk '/^SwapTotal:/ {print $2}' /proc/meminfo)"
+    if (( avail < mem )); then
+        warn "swap ($(( avail / 1024 / 1024 ))G) smaller than RAM ($(( mem / 1024 / 1024 ))G) - image may not fit"
+        return 1
+    fi
+    echo "swap: OK ($(( avail / 1024 / 1024 ))G)"
+    return 0
+}
+
+check_resume() {
+    if grep -qw "resume=" /proc/cmdline 2>/dev/null; then
+        echo "resume=: OK ($(grep -o 'resume=[^ ]*' /proc/cmdline | head -1))"
+        return 0
+    fi
+    warn "no resume= kernel parameter - resume from hibernate will fail (run: hibernate --setup + reboot)"
+    return 1
+}
+
+check_disk_mode() {
+    local modes
+    modes="$(cat /sys/power/disk 2>/dev/null || echo missing)"
+    if [[ "$modes" == *"disabled"* ]] || [[ "$modes" == "missing" ]]; then
+        warn "hibernation disabled by kernel (/sys/power/disk: $modes)"
+        return 1
+    fi
+    echo "kernel hibernate: OK ($modes)"
+    return 0
+}
+
+check_secureboot() {
+    local sb
+    if command -v mokutil >/dev/null 2>&1; then
+        sb="$(mokutil --sb-state 2>/dev/null || true)"
+        if grep -qi enabled <<<"$sb"; then
+            warn "Secure Boot is ON - kernel lockdown blocks hibernate; disable it in firmware or expect failure"
+            return 1
+        fi
+    fi
+    echo "secure boot: OK (off or not present)"
+    return 0
+}
+
+check_nvidia() {
+    # NOTE: read lsmod into a variable first - `lsmod | grep -q` under
+    # `set -o pipefail` randomly fails when grep exits early and lsmod
+    # dies on SIGPIPE.
+    local mods
+    mods="$(lsmod 2>/dev/null || true)"
+    if ! grep -q '^nvidia ' <<<"$mods"; then
+        echo "nvidia: not loaded, nothing to preserve"
+        return 0
+    fi
+    local preserve
+    preserve="$(cat /proc/driver/nvidia/params 2>/dev/null | awk -F: '/PreserveVideoMemoryAllocations/ {gsub(/ /,"",$2); print $2}' || echo 0)"
+    if [[ "$preserve" != "1" ]]; then
+        warn "NVreg_PreserveVideoMemoryAllocations != 1 - dGPU state may be lost over hibernate (run: hibernate --setup + reboot)"
+        return 1
+    fi
+    echo "nvidia: OK (video memory preserved)"
+    return 0
+}
+
+run_checks() {
+    fail=0
+    check_swap || fail=1
+    check_resume || fail=1
+    check_disk_mode || fail=1
+    check_secureboot || fail=1
+    check_nvidia || fail=1
+    return "$fail"
+}
+
+case "${1:-}" in
+    --check|-c)
+        run_checks
+        ;;
+    --setup)
+        sudo -n "$SETUP_HELPER" "$@"
+        echo "--- re-checking ---"
+        run_checks
+        ;;
+    -h|--help|help)
+        sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'
+        ;;
+    "")
+        if ! run_checks; then
+            echo "hibernate: preflight FAILED - fix the items above or run: hibernate --setup" >&2
+            exit 1
+        fi
+        # Sync + freeze new dGPU work so the image is consistent.
+        if [[ -x "$HOME/.local/bin/gpu" ]]; then
+            "$HOME/.local/bin/gpu" status >/dev/null 2>&1 || true
+        fi
+        echo "hibernating..."
+        exec /usr/bin/systemctl hibernate
+        ;;
+    *)
+        echo "Usage: hibernate [--check|--setup]" >&2
+        exit 2
+        ;;
+esac

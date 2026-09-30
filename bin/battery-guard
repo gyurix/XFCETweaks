@@ -1,10 +1,23 @@
 #!/usr/bin/env bash
-
+# battery-guard - charger plug/unplug OSD + low-battery hibernate countdown.
+#
+# Triggered two ways: every 30 s by battery-guard.timer (safety net) and
+# INSTANTLY by charger-watch on any power_supply uevent. Overlaps are
+# serialized with flock; a run that finds the lock busy waits for it
+# instead of quitting, so a flip seen mid-run is still handled.
+#
+# Source of truth for "on charger" is the AC/USB-C mains online flag, NOT
+# the battery status: status flips through "Not charging"/"Full"/
+# conservation-mode states that have nothing to do with the plug.
 set -u
 
 readonly STATE_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 readonly STATE_FILE="${STATE_DIR}/battery-guard.state"
+readonly LOCK_FILE="${STATE_DIR}/battery-guard.lock"
 readonly COUNTDOWN_SERVICE="battery-hibernate-countdown.service"
+
+exec 9>"$LOCK_FILE"
+flock -w 15 9 || exit 0
 
 battery=""
 for candidate in /sys/class/power_supply/*; do
@@ -17,55 +30,94 @@ done
 
 [[ -n "$battery" ]] || exit 0
 
+# 1 = on charger (any Mains/USB-C input online), 0 = on battery.
+on_ac=0
+for input in /sys/class/power_supply/*; do
+    [[ -r "$input/type" && -r "$input/online" ]] || continue
+    case "$(<"$input/type")" in
+        Mains|USB|Wireless)
+            [[ "$(<"$input/online")" == "1" ]] && { on_ac=1; break; }
+            ;;
+    esac
+done
+
 capacity="$(<"$battery/capacity")"
 status="$(<"$battery/status")"
 [[ "$capacity" =~ ^[0-9]+$ ]] || exit 0
+now="$(date +%s)"
 
 save_state() {
-    # TAB-separated: status can be multi-word ("Not charging").
-    printf '%s\t%s\t%s\n' "$capacity" "$status" "$now" > "$STATE_FILE"
+    printf 'v2\t%s\t%s\t%s\t%s\n' "$on_ac" "$capacity" "$status" "$now" > "$STATE_FILE"
 }
 
-# Native bar (int:value) + glyph+percent badge icon: bar, icon and exact
-# percentage together. Names mirror osd-badge chg so the hot path stays
-# a single file check.
+# Native bar (int:value) + glyph+percent badge icon.
 charge_notify() {
-    local summary="$1" pct="$2" rounded level tag
-    rounded=$(( (pct / 5) * 5 ))
+    local summary="$1" pct="$2" level tag
+    (( pct > 100 )) && pct=100
     level=$(( (pct / 10) * 10 ))
-    if [[ "$status" != "Discharging" && "$level" -ge 100 ]]; then
+    if [[ "$on_ac" == "1" && "$level" -ge 100 ]]; then
         tag="full"
-    elif [[ "$status" != "Discharging" ]]; then
+    elif [[ "$on_ac" == "1" ]]; then
         tag="c$level"
     else
         tag="d$level"
     fi
-    [[ -f "$HOME/.local/share/icons/hicolor/48x48/status/osd-chg-$tag-$rounded.png" ]] \
-        || $HOME/.local/bin/osd-badge chg "$pct" "$status" > /dev/null
-    (( pct > 100 )) && pct=100
+    # osd-badge picks charging vs discharging from the status argument, so
+    # derive it from on_ac like $tag: right after a plug event sysfs status
+    # can still read "Discharging", and a mismatched name would leave the
+    # notification on a missing (broken-image) icon.
+    local badge_status="Discharging"
+    [[ "$on_ac" == "1" ]] && badge_status="Charging"
+    # One badge per exact percent: the number is baked into the image, so
+    # a coarser cache key would show a stale value (38% badge at 35%).
+    [[ -f "$HOME/.local/share/icons/hicolor/48x48/status/osd-chg-$tag-$pct.png" ]] \
+        || $HOME/.local/bin/osd-badge chg "$pct" "$badge_status" > /dev/null
     /usr/bin/notify-send \
         --app-name="Charger" \
         --urgency=low \
         --hint="int:value:$pct" \
-        --icon="osd-chg-$tag-$rounded" \
+        --icon="osd-chg-$tag-$pct" \
         "$summary ${2}%" >/dev/null 2>&1 || true
 }
 
-# Charger plug/unplug notification with percentage only (no time estimates).
-# Skipped on first run so login doesn't spam.
-now="$(date +%s)"
+# Debounce: the EC can flap online 1->0->1 on a loose barrel jack.
+# Re-read after 1 s; only a stable flip notifies.
 if [[ -r "$STATE_FILE" ]]; then
-    IFS=$'\t' read -r _ last_status _rest < "$STATE_FILE" || true
-    if [[ -n "${last_status:-}" && "$status" != "$last_status" ]]; then
-        if [[ "$last_status" == "Discharging" ]]; then
-            charge_notify "Charger plugged in" "$capacity"
-        elif [[ "$status" == "Discharging" ]]; then
-            charge_notify "On battery" "$capacity"
+    IFS=$'\t' read -r ver last_ac _cap _st _ts < "$STATE_FILE" || true
+    if [[ "${ver:-}" != "v2" ]]; then
+        # One-time migration from the old status-based state file.
+        save_state
+        exit 0
+    fi
+    if [[ -n "${last_ac:-}" && "$on_ac" != "$last_ac" ]]; then
+        sleep 1
+        stable=0
+        for input in /sys/class/power_supply/*; do
+            [[ -r "$input/type" && -r "$input/online" ]] || continue
+            case "$(<"$input/type")" in
+                Mains|USB|Wireless)
+                    [[ "$(<"$input/online")" == "1" ]] && { stable=1; break; }
+                    ;;
+            esac
+        done
+        if [[ "$stable" == "$on_ac" ]]; then
+            capacity="$(<"$battery/capacity")"
+            status="$(<"$battery/status")"
+            [[ "$capacity" =~ ^[0-9]+$ ]] || { save_state; exit 0; }
+            if [[ "$on_ac" == "1" ]]; then
+                charge_notify "Charger plugged in" "$capacity"
+            else
+                charge_notify "On battery" "$capacity"
+            fi
         fi
     fi
+else
+    # First run (e.g. right after login): seed state, never notify.
+    save_state
+    exit 0
 fi
 
-if [[ "$status" != "Discharging" ]]; then
+if [[ "$on_ac" == "1" ]]; then
     save_state
     /usr/bin/systemctl --user stop "$COUNTDOWN_SERVICE" 2>/dev/null || true
     exit 0
@@ -78,7 +130,7 @@ if (( capacity <= 18 )); then
             --app-name="Battery guard" \
             --urgency=critical \
             --icon=battery-empty \
-            "Battery ${capacity}% — countdown failed" \
+            "Battery ${capacity}% - countdown failed" \
             "Plug in charger now."
         exit 1
     fi

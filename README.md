@@ -15,11 +15,14 @@ XFCE 4.18 (X11). No secrets in this repo.
 | ![headset](screenshots/feat-headphones.png) | [Headphone auto-switch](#headphone-auto-switch) | Plug/unplug routing without speaker blips |
 | ![mic-live](screenshots/feat-mic-live.png) | [Mic quality guard](#mic-quality-guard) | Pinned levels, clean filter feed |
 | ![battery](screenshots/osd-battery.png) | [Realtime audio](#realtime-audio-priority) | Stutter-free PipeWire under load |
+| | [dGPU control](#dgpu-control) | `gpu on/off/auto` + per-launch pinning |
+| | [Hibernate](#hibernate) | `hibernate` with preflight checks + one-shot setup |
 | | [Show-desktop](#show-desktop) | Minimizes even Wine windows |
 | | [Fullscreen zoom](#fullscreen-zoom) | Super+plus/minus magnifier |
 | | [Smart charge](#smart-charge) | Conservation-mode helper |
 | | [OSD badges](#osd-badge-engine) | Cached icon engine behind every HUD |
 | | [Icon theme guard](#icon-theme-guard) | Stops missing system icons (start menu, apps) |
+| | [Terminal fonts](#terminal-fonts) | Braille + shape fallbacks so opencode spinners never show tofu |
 
 ### Brightness
 
@@ -107,13 +110,19 @@ Results land in the clipboard via a small GTK owner process.
 <details>
 <summary>Read more</summary>
 
-A 30 s timer (`bin/battery-guard`) watches the battery: charger
-plug/unplug notifications with charge badges, and at ≤18% on battery a
-fullscreen **plug-in-charger countdown**
-(`sbin/battery-shutdown-countdown`) to hibernation. While the countdown is
-up it pauses MPRIS players (Firefox, Spotify, …) over D-Bus, and resumes
-exactly the players it paused when the charger is plugged in — never on
-the hibernate path. Test mode (`--test`) skips media handling.
+`charger-watch.service` (`bin/charger-watch`) listens to udev
+`power_supply` events and runs `bin/battery-guard` the moment the charger
+is plugged or unplugged, with the 30 s timer kept as a safety net. The guard reads the AC/USB-C mains
+`online` flag as source of truth (not the battery `status`, which flips
+through `Not charging`/`Full`/conservation states), debounces EC flaps,
+and notifies charger plug/unplug with charge badges. At ≤18% on battery
+a fullscreen **plug-in-charger countdown**
+(`sbin/battery-shutdown-countdown`) to hibernation appears; it also exits
+early on charger plug via a sysfs cross-check when UPower lags. While the
+countdown is up it pauses MPRIS players (Firefox, Spotify, …) over D-Bus,
+and resumes exactly the players it paused when the charger is plugged
+in — never on the hibernate path. Test mode (`--test`) skips media
+handling.
 
 </details>
 
@@ -179,28 +188,72 @@ ignored by Wine and xfwm4 cancels it on touch).
 <details>
 <summary>Read more</summary>
 
-`bin/xfwm-fullscreen-zoom` — Super+plus/minus magnifier.
+`bin/xfwm-fullscreen-zoom` — Super+plus/minus magnifier (`Super+=`,
+`Super+-`, `Super+KP_Add/KP_Subtract`) on top of the xfwm4 compositor zoom.
+xfwm4 only zooms on wheel clicks whose modifiers are *exactly* its
+`easy_click` modifier (Alt by default), so the helper swaps the held
+Super for `easy_click`, injects `ZOOM_STEPS` (default 3, each 1/16 of the
+scale) wheel clicks, waits for xfwm4's sync pointer grab to consume each
+one, then restores Super if it is still physically held — while a wheel
+button is down, so xcape's Super-tap (Whisker menu) doesn't fire. One
+Python process over XTest (~100 ms under load vs. 400+ ms for the old
+xdotool pair).
 
 </details>
 
-### dGPU and Tiny10 VM
+### dGPU control
 
-`gpu off` leaves the GPU on the host with runtime power management; active
-clients can keep it awake. `gpu host` reserves it for host apps. `gpu vm`
-assigns the RTX 5070 and its audio function exclusively to the stopped
-`tiny10` libvirt VM; it refuses while Xorg or any app holds the card. From
-a text console or SSH, save work and stop `lightdm` before switching. It
-never kills GPU clients. Shut down the VM before switching back, then run
-`gpu host` and start `lightdm`.
+<details>
+<summary>Read more</summary>
 
-`gpu on` gives the GPU to the host while VMs use virtual displays. Linux
-VMs can use VirGL if configured; Tiny10's Windows virtual display is 2D,
-not shared NVIDIA acceleration. Full PCI passthrough is exclusive. `gpu
-status` reports current bindings; `gpu run` pins new host processes.
+`bin/gpu` + `sbin/gpu-power` manage the RTX 5070 Laptop GPU on this host:
 
-The stopped `tiny10` VM has 8 GiB RAM, 8 vCPUs, a 96 GiB sparse qcow2 disk,
-UEFI, and a local copy of the USB Tiny10 ISO. Manage it with `virt-manager`
-or `sudo virsh -c qemu:///system start tiny10`.
+- `gpu off` — keep the dGPU on the host but allow runtime suspension when idle;
+  new launches prefer the Intel iGPU. Existing dGPU clients remain active.
+- `gpu host` — host-only, powered-on dGPU for host apps.
+- `gpu vm` — exclusive PCI passthrough of GPU and HDMI audio to the stopped
+  `tiny10` libvirt VM. Refuses while Xorg or other processes use the GPU;
+  switch from a text console or SSH and stop `lightdm` after saving work.
+  Never kills clients itself.
+- `gpu on` — host owns the dGPU, VMs keep their virtual display. For Linux
+  VMs, VirtIO-GPU/VirGL can share host 3D rendering if configured separately;
+  Tiny10's current Windows VirtIO GPU driver lacks stable VirGL 3D support,
+  so its QXL virtual display is 2D in this mode.
+- `gpu auto` — alias for `gpu off`.
+- `gpu status` — mode, PCI power state, draw, dGPU clients.
+- `gpu run [--dgpu|--igpu] -- <cmd>` — launch pinned to a GPU.
+
+`tiny10` is a libvirt system VM with an 8 GiB RAM/8 vCPU definition,
+96 GiB sparse qcow2 disk, UEFI, and a verified local copy of the USB Tiny10
+ISO. Open it with `virt-manager` (do not launch the GUI automatically), or
+`sudo virsh -c qemu:///system start tiny10`. For NVIDIA acceleration run
+`gpu vm` first, after stopping `lightdm` from a text console or SSH.
+When done with passthrough, shut down the VM, run `gpu host`, then start
+`lightdm`. A VM using only its virtual display may stay running when switching
+between `gpu host`, `gpu on`, and `gpu off`. PCI passthrough is exclusive: it cannot
+share the physical NVIDIA device with host apps. No mode migrates live
+GL/Vulkan/CUDA contexts or force-closes processes.
+
+</details>
+
+### Hibernate
+
+<details>
+<summary>Read more</summary>
+
+`bin/hibernate` hibernates the machine after preflight checks (swap ≥ RAM,
+`resume=` kernel parameter, kernel hibernate support, Secure Boot off,
+NVIDIA VRAM preservation). One-time setup (latest HWE kernel, btrfs-safe
+swapfile, GRUB `resume=UUID`/`resume_offset=`, initramfs, NVIDIA PM
+options, systemd hibernate policy):
+
+```sh
+sudo hibernate-setup --kernel
+# reboot, then:
+hibernate --check && hibernate
+```
+
+</details>
 
 ### Smart charge
 
@@ -246,6 +299,26 @@ rewritten, so the path unit does not loop.
 
 </details>
 
+### Terminal fonts
+
+<details>
+<summary>Read more</summary>
+
+opencode's loading animation is a braille spinner (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`,
+U+2800–U+28FF) and its prompt scanner uses `⬥◆⬩⬪·■⬝` (U+2B25/U+2B29/
+U+2B2A/U+2B1D have zero coverage in stock mono fonts — no installed
+monospace font covers braille either, so terminals show tofu boxes).
+
+`install.sh` installs `fonts-symbola fonts-noto-extra
+fonts-jetbrains-mono`, drops `config/fontconfig/
+10-xfcetweaks-terminal-fallback.conf` into
+`~/.config/fontconfig/conf.d/` (monospace → JetBrains Mono + Symbola /
+Noto Sans Symbols2 / DejaVu Sans fallback), and seeds
+`~/.config/ghostty/config` with the same fallbacks when missing.
+Restart Ghostty after install so it picks up the new fonts.
+
+</details>
+
 ## Installation
 
 ```sh
@@ -256,7 +329,8 @@ cd XFCETweaks
 
 `install.sh` installs packages (`xdotool wmctrl x11-utils imagemagick
 libnotify-bin python3-gi python3-pil python3-dbus adwaita-icon-theme
-fonts-dejavu xfce4-power-manager upower pipewire-pulse wireplumber`),
+fonts-dejavu fonts-symbola fonts-noto-extra fonts-jetbrains-mono
+xfce4-power-manager upower pipewire-pulse wireplumber`),
 copies `bin/` → `~/.local/bin`, `libexec/` → `~/.local/libexec`,
 `sbin/` → `/usr/local/bin` (sudo), enables the user units, applies
 keybindings via `xfconf/apply.sh`, and refreshes the icon cache. Set
@@ -268,8 +342,9 @@ Requirements and notes:
 - Brightness needs a sysfs backlight (here `nvidia_wmi_ec_backlight`,
   max 800 — other max values are auto-scaled) plus
   `xfpm-power-backlight-helper` from `xfce4-power-manager`.
-- The hibernate countdown calls `sudo -n systemctl hibernate`; allow it
-  passwordless if wanted, otherwise it falls back to suspend.
+- The hibernate countdown and `hibernate` call `sudo -n systemctl
+  hibernate`; `install.sh` allows that (plus the GPU/power helpers)
+  passwordless via `sudoers.d/xfcetweaks-helpers`.
 - Log out/in after install if keybindings lag.
 
 ## Layout
@@ -277,9 +352,15 @@ Requirements and notes:
 ```
 bin/            user keybinding scripts (~/.local/bin)
 libexec/        screenshot cropper + clipboard owner (~/.local/libexec)
-sbin/           root helpers: brightness-step, battery-shutdown-countdown
-systemd/user/   battery, audio, mic and rt-priority units + PipeWire drop-ins
+sbin/           root helpers: brightness-step, battery-shutdown-countdown,
+                gpu-power, hibernate-setup
+systemd/user/   battery, charger-watch, audio, mic and rt-priority units + PipeWire drop-ins
+modprobe/       NVIDIA VRAM-preserve + D3cold PM options
+sleep.conf.d/   systemd hibernation policy
+sudoers.d/      passwordless sudo for the bundled helpers only
 config/         audio.conf.example (headset address for auto-switch)
+                fontconfig/ terminal monospace fallbacks (opencode spinners)
+                ghostty/ font fallbacks for Ghostty
 xfconf/         apply.sh + reference dumps of current settings
 screenshots/    OSD badge samples used above
 ```

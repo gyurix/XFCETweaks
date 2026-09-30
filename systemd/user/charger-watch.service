@@ -1,0 +1,11 @@
+[Unit]
+Description=Instant charger plug/unplug OSD (udev power_supply events)
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/charger-watch
+Restart=always
+RestartSec=2s
+
+[Install]
+WantedBy=default.target

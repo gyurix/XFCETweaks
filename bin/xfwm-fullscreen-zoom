@@ -1,20 +1,282 @@
-#!/bin/sh
-set -eu
+#!/usr/bin/python3 -IS
+"""Super+plus/minus magnifier on top of the xfwm4 compositor zoom.
 
-case "${1:-}" in
-    in) button=4 ;;
-    out) button=5 ;;
-    *) echo "usage: ${0##*/} in|out [--held]" >&2; exit 2 ;;
-esac
+Usage: xfwm-fullscreen-zoom in|out [--held]
 
-steps=${ZOOM_STEPS:-3}
+xfwm4 only zooms on wheel presses whose modifier state is exactly its
+easy_click modifier (Alt by default), so Super+wheel does nothing. The
+modifiers held for the shortcut are swapped for easy_click around injected
+wheel clicks, then restored if still physically held. Everything runs in
+one process over XTest; the old xdotool pair cost 100-300 ms per press on a
+loaded laptop. --held is accepted for older bindings and ignored: held
+modifiers are read from the server.
+"""
 
-xdotool keyup Shift_L Shift_R Control_L Control_R Alt_L Alt_R Meta_L Meta_R >/dev/null 2>&1 || true
+import ctypes as C
+import os
+import subprocess
+import sys
+import time
 
-if [ "${2:-}" = "--held" ]; then
-    xdotool click --repeat "$steps" --delay 15 "$button"
-else
-    xdotool keydown super
-    xdotool click --repeat "$steps" --delay 15 "$button"
-    xdotool keyup super
-fi
+STEPS = max(1, int(os.environ.get("ZOOM_STEPS", "3")))  # 1 click = 1/16 scale
+
+SHIFT, CONTROL = 1 << 0, 1 << 2
+ALT = {0xFFE9, 0xFFEA}
+META = {0xFFE7, 0xFFE8}
+SUPER = {0xFFEB, 0xFFEC}
+HYPER = {0xFFED, 0xFFEE}
+NO_SYMBOL = 0
+IS_X_EXTENSION_KEYBOARD = 3
+KEY_CLASS = 0
+GRAB_MODE_ASYNC = 1
+
+
+class ModifierKeymap(C.Structure):
+    _fields_ = [("max_keypermod", C.c_int), ("modifiermap", C.POINTER(C.c_ubyte))]
+
+
+class DeviceInfo(C.Structure):
+    _fields_ = [("id", C.c_ulong), ("type", C.c_ulong), ("name", C.c_char_p),
+                ("num_classes", C.c_int), ("use", C.c_int),
+                ("inputclassinfo", C.c_void_p)]
+
+
+class DeviceState(C.Structure):
+    _fields_ = [("device_id", C.c_ulong), ("num_classes", C.c_int),
+                ("data", C.c_void_p)]
+
+
+class InputClass(C.Structure):
+    _fields_ = [("c_class", C.c_ubyte), ("length", C.c_ubyte)]
+
+
+class KeyState(C.Structure):
+    _fields_ = [("c_class", C.c_ubyte), ("length", C.c_ubyte),
+                ("num_keys", C.c_short), ("keys", C.c_ubyte * 32)]
+
+
+def load_libs():
+    x11 = C.CDLL("libX11.so.6")
+    xtst = C.CDLL("libXtst.so.6")
+    xi = C.CDLL("libXi.so.6")
+    dpy = C.c_void_p
+    for name, res, args in (
+        ("XOpenDisplay", dpy, [C.c_char_p]),
+        ("XCloseDisplay", C.c_int, [dpy]),
+        ("XSync", C.c_int, [dpy, C.c_int]),
+        ("XDefaultRootWindow", C.c_ulong, [dpy]),
+        ("XGetModifierMapping", C.POINTER(ModifierKeymap), [dpy]),
+        ("XFreeModifiermap", C.c_int, [C.POINTER(ModifierKeymap)]),
+        ("XQueryKeymap", C.c_int, [dpy, C.POINTER(C.c_ubyte)]),
+        ("XkbKeycodeToKeysym", C.c_ulong, [dpy, C.c_ubyte, C.c_int, C.c_int]),
+        ("XGrabKeyboard", C.c_int, [dpy, C.c_ulong, C.c_int, C.c_int, C.c_int, C.c_ulong]),
+        ("XUngrabKeyboard", C.c_int, [dpy, C.c_ulong]),
+        ("XQueryPointer", C.c_int, [dpy, C.c_ulong, C.POINTER(C.c_ulong), C.POINTER(C.c_ulong),
+                                    C.POINTER(C.c_int), C.POINTER(C.c_int), C.POINTER(C.c_int),
+                                    C.POINTER(C.c_int), C.POINTER(C.c_uint)]),
+    ):
+        getattr(x11, name).restype, getattr(x11, name).argtypes = res, args
+    for name in ("XTestFakeKeyEvent", "XTestFakeButtonEvent"):
+        getattr(xtst, name).argtypes = [dpy, C.c_uint, C.c_int, C.c_ulong]
+    for name, res, args in (
+        ("XListInputDevices", C.POINTER(DeviceInfo), [dpy, C.POINTER(C.c_int)]),
+        ("XFreeDeviceList", None, [C.POINTER(DeviceInfo)]),
+        ("XOpenDevice", C.c_void_p, [dpy, C.c_ulong]),
+        ("XCloseDevice", C.c_int, [dpy, C.c_void_p]),
+        ("XQueryDeviceState", C.POINTER(DeviceState), [dpy, C.c_void_p]),
+        ("XFreeDeviceState", None, [C.POINTER(DeviceState)]),
+    ):
+        getattr(xi, name).restype, getattr(xi, name).argtypes = res, args
+    return x11, xtst, xi
+
+
+def easy_click_names():
+    try:
+        value = subprocess.run(
+            ["xfconf-query", "-c", "xfwm4", "-p", "/general/easy_click"],
+            capture_output=True, text=True, timeout=2).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        value = ""
+    if not value or value.lower() == "true":
+        value = "Alt"  # xfwm4's own default / legacy boolean form
+    return value.replace("<", " ").replace(">", " ").lower().split()
+
+
+def is_down(keymap, kc):
+    return keymap[kc >> 3] & (1 << (kc & 7))
+
+
+def physically_held(x11, xi, dpy, keycodes):
+    """Keycodes still down on a real keyboard (XTest releases only reach the master)."""
+    held = set()
+    count = C.c_int()
+    devices = xi.XListInputDevices(dpy, C.byref(count))
+    if not devices:
+        return held
+    try:
+        for i in range(count.value):
+            info = devices[i]
+            if info.use != IS_X_EXTENSION_KEYBOARD or b"XTEST" in (info.name or b""):
+                continue
+            dev = xi.XOpenDevice(dpy, info.id)
+            if not dev:
+                continue
+            state = xi.XQueryDeviceState(dpy, dev)
+            if state:
+                addr = state.contents.data
+                for _ in range(state.contents.num_classes):
+                    cls = InputClass.from_address(addr)
+                    if cls.c_class == KEY_CLASS:
+                        keys = KeyState.from_address(addr).keys
+                        held.update(kc for kc in keycodes if is_down(keys, kc))
+                    addr += cls.length or C.sizeof(InputClass)
+                xi.XFreeDeviceState(state)
+            xi.XCloseDevice(dpy, dev)
+    finally:
+        xi.XFreeDeviceList(devices)
+    return held
+
+
+def open_display():
+    x11, xtst, xi = load_libs()
+    # BadDevice from XOpenDevice on odd slaves must not kill the process.
+    global _ignore_errors
+    _ignore_errors = C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_void_p)(lambda d, e: 0)
+    x11.XSetErrorHandler(_ignore_errors)
+    return x11, xtst, xi, x11.XOpenDisplay(None)
+
+
+def release_when_lifted(keycodes):
+    """Drop the XTest copy of restored keys once the real keys are up.
+
+    Left down on the XTEST device, the next synthetic press of that key
+    would be swallowed as a modifier autorepeat.
+    """
+    if os.fork():
+        return
+    x11, xtst, xi, dpy = open_display()
+    pending = set(keycodes)
+    deadline = time.monotonic() + 600
+    while dpy and pending and time.monotonic() < deadline:
+        time.sleep(0.05)
+        for kc in pending - physically_held(x11, xi, dpy, pending):
+            xtst.XTestFakeKeyEvent(dpy, kc, False, 0)
+            pending.discard(kc)
+        x11.XSync(dpy, 0)
+    os._exit(0)
+
+
+def main() -> int:
+    direction = sys.argv[1] if len(sys.argv) > 1 else ""
+    if direction not in ("in", "out"):
+        print(f"usage: {os.path.basename(sys.argv[0])} in|out [--held]", file=sys.stderr)
+        return 2
+    button = 4 if direction == "in" else 5
+
+    x11, xtst, xi, dpy = open_display()
+    if not dpy:
+        print("cannot open X display", file=sys.stderr)
+        return 1
+
+    kmap = x11.XGetModifierMapping(dpy)
+    per = kmap.contents.max_keypermod
+    rows = [[kc for kc in kmap.contents.modifiermap[i * per:(i + 1) * per] if kc]
+            for i in range(8)]
+    x11.XFreeModifiermap(kmap)
+
+    def syms(kc):
+        return {x11.XkbKeycodeToKeysym(dpy, kc, 0, level) for level in range(4)}
+
+    # Same virtual-modifier resolution as xfwm4's initModifiers()/getModifierMap().
+    def rows_with(keysyms):
+        return sum(1 << i for i in range(3, 8) if any(syms(kc) & keysyms for kc in rows[i]))
+
+    masks = {"shift": SHIFT, "control": CONTROL, "ctrl": CONTROL, "primary": CONTROL,
+             "alt": 1 << 3, "meta": rows_with(META), "super": rows_with(SUPER),
+             "hyper": rows_with(HYPER)}
+    masks.update({f"mod{i}": 1 << (i + 2) for i in range(1, 6)})
+    relevant = SHIFT | CONTROL | rows_with(ALT) | masks["meta"] | masks["super"] | masks["hyper"]
+    target = 0
+    for name in easy_click_names():
+        target |= masks.get(name, 0)
+    target &= relevant
+    if not target:
+        print("xfwm4 easy_click modifier is unset; zoom needs one", file=sys.stderr)
+        return 1
+
+    def bits(kc):
+        return sum(1 << i for i in range(8) if kc in rows[i]) & relevant
+
+    keymap = (C.c_ubyte * 32)()
+    x11.XQueryKeymap(dpy, keymap)
+    held = {kc for i in range(8) if relevant & (1 << i) for kc in rows[i] if is_down(keymap, kc)}
+    release = sorted(kc for kc in held if bits(kc) & ~target)
+    have = 0
+    for kc in held - set(release):
+        have |= bits(kc)
+    press = []
+    for i in range(8):
+        if target & (1 << i) and not have & (1 << i):
+            # Fake modifier-only keycodes (NoSymbol at level 1) set no state.
+            real = [kc for kc in rows[i] if bits(kc) & ~target == 0
+                    and x11.XkbKeycodeToKeysym(dpy, kc, 0, 0) != NO_SYMBOL]
+            if real:
+                press.append(real[0])
+                have |= bits(real[0])
+
+    def key(kc, down):
+        xtst.XTestFakeKeyEvent(dpy, kc, down, 0)
+
+    def click(down):
+        xtst.XTestFakeButtonEvent(dpy, button, down, 0)
+
+    root = x11.XDefaultRootWindow(dpy)
+    button_mask = 1 << (7 + button)  # Button1Mask == 1 << 8
+
+    def wait_button(down):
+        # xfwm4 grabs the wheel with GrabModeSync, so pointer events queue
+        # frozen until it has handled the previous one, but key events don't:
+        # swapping modifiers back early turns the queued zoom clicks into
+        # plain scrolls in the app underneath.
+        win, i, mask = C.c_ulong(), C.c_int(), C.c_uint()
+        deadline = time.monotonic() + 0.25
+        while time.monotonic() < deadline:
+            x11.XQueryPointer(dpy, root, C.byref(win), C.byref(win), C.byref(i),
+                              C.byref(i), C.byref(i), C.byref(i), C.byref(mask))
+            if bool(mask.value & button_mask) == down:
+                return
+            time.sleep(0.001)
+
+    # Keep the synthetic easy_click tap away from the focused app (Firefox
+    # would toggle its menu bar on a lone Alt). Fails harmlessly while the
+    # shortcut daemon still holds its own grab until the hotkey is released.
+    grabbed = x11.XGrabKeyboard(dpy, root, 0, GRAB_MODE_ASYNC, GRAB_MODE_ASYNC, 0) == 0
+    for kc in release:
+        key(kc, False)
+    for kc in press:
+        key(kc, True)
+    for i in range(STEPS):
+        click(True)
+        if i < STEPS - 1:
+            click(False)
+            wait_button(False)
+    wait_button(True)
+    for kc in reversed(press):
+        key(kc, False)
+    # Re-press while the last wheel button is still down: xcape then counts
+    # Super as used and won't fire its Super-tap (Whisker menu).
+    restored = sorted(physically_held(x11, xi, dpy, release)) if release else []
+    for kc in restored:
+        key(kc, True)
+    click(False)
+    if grabbed:
+        x11.XUngrabKeyboard(dpy, 0)
+    x11.XSync(dpy, 0)
+    x11.XCloseDisplay(dpy)
+    if restored:
+        release_when_lifted(restored)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

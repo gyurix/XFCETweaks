@@ -25,7 +25,14 @@ FG = (255, 255, 255, 255)
 TRACK = (26, 26, 26, 255)
 BLUE = (33, 150, 243, 255)
 RED = (239, 83, 80, 255)
-FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+FONT_CANDIDATES = (
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+    "/usr/share/fonts/truetype/ubuntu/Ubuntu-B.ttf",
+)
 FONT_SIZE = 26  # fixed: identical size for 2-, 3- and 4-digit values
 GLYPH_PX = 32
 PAD = 10
@@ -96,7 +103,6 @@ def spec_from_args(argv):
     if argv[0] == "chg":
         pct = max(0, min(100, int(argv[1])))
         charging = argv[2] != "Discharging"
-        step = (pct // 5) * 5
         level = (pct // 10) * 10
         if charging and level >= 100:
             glyph = os.path.join(ADW, "battery-level-100-charged-symbolic.svg")
@@ -107,7 +113,7 @@ def spec_from_args(argv):
                 ADW, f"battery-level-{level}{suffix}-symbolic.svg"
             )
             tag = ("c" if charging else "d") + str(level)
-        return f"osd-chg-{tag}-{step}", glyph, f"{pct}%", False
+        return f"osd-chg-{tag}-{pct}", glyph, f"{pct}%", False
     # plain number badge
     pct = max(0, min(200, int(argv[0])))
     step = (pct // 5) * 5
@@ -155,10 +161,42 @@ def main() -> int:
 
 
 def load_font():
+    """Bold sans for badge numbers (ASCII only: digits, %, /).
+
+    Tries bundled candidates in order, then asks fontconfig for the
+    system bold sans, so badges still render at the right size when
+    fonts-dejavu is missing (SKIP_APT=1, minimal installs). Last resort
+    is PIL's bitmap default.
+    """
     from PIL import ImageFont
 
+    for candidate in FONT_CANDIDATES:
+        if os.path.exists(candidate):
+            try:
+                return ImageFont.truetype(candidate, FONT_SIZE)
+            except OSError:
+                continue
     try:
-        return ImageFont.truetype(FONT_PATH, FONT_SIZE)
+        import subprocess
+
+        out = subprocess.run(
+            ["fc-match", "--format=%{file}\n", "Sans:bold"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            timeout=10,
+            check=False,
+        )
+        matched = out.stdout.decode(errors="ignore").splitlines()
+        if matched and os.path.exists(matched[0]):
+            try:
+                return ImageFont.truetype(matched[0], FONT_SIZE)
+            except OSError:
+                pass
+    except Exception:
+        pass
+    try:
+        return ImageFont.truetype("DejaVuSans-Bold.ttf", FONT_SIZE)
     except OSError:
         return ImageFont.load_default()
 

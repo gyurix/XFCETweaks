@@ -1,0 +1,21 @@
+# XFCETweaks Ghostty fonts: primary + fallbacks for opencode spinners.
+# Startup loading = braille U+2800-U+28FF, prompt scanner = U+2B25/U+2B29/U+2B2A/U+2B1D.
+# Only Symbola covers the U+2B00 shapes; braille falls back to Symbola/DejaVu Sans.
+font-family = JetBrains Mono
+font-family = Symbola
+font-family = Noto Sans Symbols 2
+font-family = DejaVu Sans
+
+# Black topbar: paint GTK chrome with terminal background (pure black),
+# independent of system Mint-Y theme.
+theme = Builtin Dark
+window-theme = ghostty
+background = #000000
+window-titlebar-background = #000000
+window-titlebar-foreground = #bbbbbb
+window-decoration = client
+gtk-titlebar = true
+gtk-titlebar-style = tabs
+gtk-tabs-location = top
+gtk-toolbar-style = flat
+gtk-titlebar-hide-when-maximized = false

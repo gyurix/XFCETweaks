@@ -131,10 +131,13 @@ class Cropper(Gtk.Window):
             cr.set_line_width(2)
             cr.rectangle(x, y, w, h)
             cr.stroke()
-            cr.select_font_face("monospace")
-            cr.set_font_size(14)
-            cr.move_to(x + 4, max(16, y - 8))
-            cr.show_text(f"{w}x{h}")
+            try:
+                cr.select_font_face("Sans")
+                cr.set_font_size(14)
+                cr.move_to(x + 4, max(16, y - 8))
+                cr.show_text(f"{w}x{h}")
+            except Exception:
+                pass
         return False
 
     def on_press(self, _widget, event):

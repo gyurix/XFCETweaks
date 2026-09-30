@@ -1,0 +1,6 @@
+# XFCETweaks: passwordless sudo for the bundled root helpers only.
+%sudo ALL=(root) NOPASSWD: /usr/local/bin/gpu-power *
+%sudo ALL=(root) NOPASSWD: /usr/local/bin/hibernate-setup *
+%sudo ALL=(root) NOPASSWD: /usr/local/bin/brightness-step *
+%sudo ALL=(root) NOPASSWD: /usr/bin/systemctl hibernate
+%sudo ALL=(root) NOPASSWD: /usr/bin/systemctl suspend

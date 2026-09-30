@@ -1,9 +1,11 @@
 #!/usr/bin/python3
+import math
 import os
 import signal
 import subprocess
 import sys
 
+import cairo
 import dbus
 import dbus.mainloop.glib
 import gi
@@ -13,6 +15,59 @@ gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, GLib, Gtk
 
 COUNTDOWN_SECONDS = int(os.environ.get("BATTERY_COUNTDOWN_SECONDS", "120"))
+RED = (1.0, 0x30 / 255, 0x30 / 255)
+BACKGROUND = (0x08 / 255, 0x08 / 255, 0x08 / 255)
+OUTLINE = (0.93, 0.93, 0.93)
+
+
+def vertical_gradient(y0, y1, top, bottom):
+    grad = cairo.LinearGradient(0, y0, 0, y1)
+    grad.add_color_stop_rgb(0, *top)
+    grad.add_color_stop_rgb(1, *bottom)
+    return grad
+
+
+def rounded_rect(cr, x, y, w, h, r):
+    cr.new_sub_path()
+    cr.arc(x + w - r, y + r, r, -math.pi / 2, 0)
+    cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
+    cr.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
+    cr.arc(x + r, y + r, r, math.pi, 3 * math.pi / 2)
+    cr.close_path()
+
+
+def draw_battery(widget, cr):
+    """Nearly empty battery with a charge bolt, drawn as vectors.
+
+    Theme icons are 16 px pixel-grid designs that turn blocky at this size,
+    and the plug emoji needs a color-emoji font; Cairo stays crisp at any
+    scale. Design box is 240x120, fitted to the widget.
+    """
+    w, h = widget.get_allocated_width(), widget.get_allocated_height()
+    s = min(w / 240, h / 120)
+    cr.translate((w - 240 * s) / 2, (h - 120 * s) / 2)
+    cr.scale(s, s)
+    cr.set_source_rgb(*OUTLINE)
+    cr.set_line_width(10)
+    rounded_rect(cr, 5, 5, 205, 110, 20)  # body
+    cr.stroke()
+    rounded_rect(cr, 214, 38, 22, 44, 8)  # terminal
+    cr.fill()
+    cr.set_source(vertical_gradient(20, 100, (1.0, 0.36, 0.36), (0.78, 0.0, 0.0)))
+    rounded_rect(cr, 20, 20, 34, 80, 9)  # last bit of charge
+    cr.fill()
+    bolt = ((122, 12), (78, 66), (108, 66), (94, 108), (142, 50), (112, 50), (128, 12))
+    for i, (x, y) in enumerate(bolt):
+        x, y = 112 + (x - 110) * 0.72, 60 + (y - 60) * 0.72
+        (cr.move_to if i == 0 else cr.line_to)(x, y)
+    cr.close_path()
+    cr.set_line_join(cairo.LINE_JOIN_ROUND)
+    cr.set_source_rgb(*BACKGROUND)
+    cr.set_line_width(14)
+    cr.stroke_preserve()
+    cr.set_source(vertical_gradient(20, 100, (1.0, 0.92, 0.23), (1.0, 0.6, 0.0)))
+    cr.fill()
+    return False
 
 
 def hibernate_available():
@@ -84,6 +139,24 @@ class MediaPauser:
         finally:
             self.paused = []
 
+def ac_online_sysfs():
+    """Fallback when UPower is stale: any Mains/USB input online."""
+    import glob
+
+    for path in glob.glob("/sys/class/power_supply/*/type"):
+        try:
+            with open(path) as handle:
+                kind = handle.read().strip()
+            if kind not in ("Mains", "USB", "Wireless"):
+                continue
+            with open(path.replace("type", "online")) as handle:
+                if handle.read().strip() == "1":
+                    return True
+        except OSError:
+            continue
+    return False
+
+
 class BatteryMonitor:
     def __init__(self):
         self.bus = dbus.SystemBus()
@@ -99,6 +172,52 @@ class BatteryMonitor:
         )
         self.props = dbus.Interface(self.device, "org.freedesktop.DBus.Properties")
         self.started = False
+        self.listeners = []
+        self.udev = None
+
+    def subscribe(self, callback):
+        """Call callback() on any UPower or kernel power_supply change.
+
+        UPower PropertiesChanged covers OnBattery/State/TimeToEmpty; the
+        udev netlink monitor covers the seconds UPower lags the EC by.
+        """
+        if not self.listeners:
+            for path in ("/org/freedesktop/UPower",
+                         "/org/freedesktop/UPower/devices/DisplayDevice"):
+                self.bus.add_signal_receiver(
+                    self.changed,
+                    signal_name="PropertiesChanged",
+                    dbus_interface="org.freedesktop.DBus.Properties",
+                    bus_name="org.freedesktop.UPower",
+                    path=path,
+                )
+            try:
+                self.udev = subprocess.Popen(
+                    ["stdbuf", "-oL", "udevadm", "monitor", "--udev",
+                     "--subsystem-match=power_supply"],
+                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                )
+                GLib.io_add_watch(self.udev.stdout, GLib.PRIORITY_DEFAULT,
+                                  GLib.IO_IN | GLib.IO_HUP, self.udev_event)
+            except OSError:
+                self.udev = None
+        self.listeners.append(callback)
+
+    def changed(self, *_):
+        for callback in list(self.listeners):
+            callback()
+
+    def udev_event(self, _source, condition):
+        line = self.udev.stdout.readline()
+        if not line:
+            return False
+        if line.startswith(b"UDEV"):
+            self.changed()
+        return True
+
+    def close(self):
+        if self.udev is not None:
+            self.udev.terminate()
 
     def value(self, name, default=0):
         try:
@@ -108,11 +227,13 @@ class BatteryMonitor:
 
     def on_battery(self):
         try:
-            return bool(
-                self.root_props.Get("org.freedesktop.UPower", "OnBattery")
-            )
-        except dbus.DBusException:
+            if self.root_props.Get("org.freedesktop.UPower", "OnBattery"):
+                # UPower says on battery - trust it only if sysfs agrees no
+                # input is online (UPower can lag the EC by seconds).
+                return not ac_online_sysfs()
             return False
+        except dbus.DBusException:
+            return not ac_online_sysfs()
 
     def should_start(self):
         state = int(self.value("State"))
@@ -147,10 +268,14 @@ class Countdown(Gtk.Window):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=24)
         box.set_halign(Gtk.Align.CENTER)
         box.set_valign(Gtk.Align.CENTER)
-        self.message = Gtk.Label(label="🔌  Plug in charger!")
+        self.icon = Gtk.DrawingArea()
+        self.icon.set_size_request(200, 100)
+        self.icon.connect("draw", draw_battery)
+        self.message = Gtk.Label(label="Plug in charger!")
         self.message.get_style_context().add_class("message")
         self.label = Gtk.Label(label=str(self.seconds))
         self.label.get_style_context().add_class("countdown")
+        box.pack_start(self.icon, False, False, 0)
         box.pack_start(self.message, False, False, 0)
         box.pack_start(self.label, False, False, 0)
         self.add(box)
@@ -182,16 +307,19 @@ class Countdown(Gtk.Window):
             self.media = MediaPauser()
         else:
             self.media = None
+        # Charger plug is event-driven; the 1 s timer only redraws the number.
+        self.monitor.subscribe(self.power_changed)
         GLib.timeout_add_seconds(1, self.tick)
 
-    def tick(self):
-        if not self.test_mode and not self.monitor.on_battery():
-            if getattr(self, "media", None) is not None:
-                self.media.resume()
-                self.media = None
-            Gtk.main_quit()
-            return False
+    def power_changed(self):
+        if self.test_mode or self.monitor.on_battery():
+            return
+        if getattr(self, "media", None) is not None:
+            self.media.resume()
+            self.media = None
+        Gtk.main_quit()
 
+    def tick(self):
         self.seconds -= 1
         self.label.set_text(str(max(0, self.seconds)))
         if self.seconds > 0:
@@ -202,8 +330,13 @@ class Countdown(Gtk.Window):
             GLib.timeout_add_seconds(2, Gtk.main_quit)
             return False
 
+        # Last-chance check in case a plug event slipped past both watchers.
+        if not self.monitor.on_battery():
+            self.power_changed()
+            return False
+
         if hibernate_available():
-            self.message.set_text("Hibernating…")
+            self.message.set_text("Hibernating...")
             self.flush()
             result = subprocess.run(
                 ["sudo", "-n", "/usr/bin/systemctl", "hibernate"], check=False
@@ -211,9 +344,9 @@ class Countdown(Gtk.Window):
             if result.returncode == 0:
                 Gtk.main_quit()
                 return False
-            self.message.set_text("Hibernation failed — suspending instead")
+            self.message.set_text("Hibernation failed - suspending instead")
         else:
-            self.message.set_text("Hibernation blocked by Secure Boot — suspending")
+            self.message.set_text("Hibernation blocked by Secure Boot - suspending")
         self.flush()
         subprocess.run(
             ["sudo", "-n", "/usr/bin/systemctl", "suspend"], check=False
@@ -240,12 +373,14 @@ def main():
             return False
         return True
 
-    if trigger_now:
-        GLib.idle_add(check)
-    else:
-        GLib.timeout_add_seconds(1, check)
+    if not trigger_now:
+        monitor.subscribe(check)
+    GLib.idle_add(check)
     signal.signal(signal.SIGTERM, lambda *_: Gtk.main_quit())
-    Gtk.main()
+    try:
+        Gtk.main()
+    finally:
+        monitor.close()
 
 
 if __name__ == "__main__":

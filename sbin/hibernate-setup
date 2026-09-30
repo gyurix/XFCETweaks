@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+# hibernate-setup - root helper: make hibernate actually work.
+# Idempotent; safe to re-run. Reboot afterwards to activate resume=/kernel.
+#
+#   hibernate-setup [--kernel] [--swapfile PATH] [--swap-size-gb N]
+#
+# Does:
+#   1. (with --kernel) install the latest HWE kernel (7.x on noble)
+#   2. create/activate a btrfs-safe swapfile >= RAM
+#   3. write resume=UUID + resume_offset= into GRUB + initramfs resume conf
+#   4. NVIDIA suspend options (PreserveVideoMemoryAllocations=1,
+#      TemporaryFilePath=/var/tmp, fine-grained D3cold PM)
+#   5. systemd sleep.conf.d allowing hibernation
+set -euo pipefail
+
+SWAPFILE="/swapfile"
+SWAPSIZE_GB=""
+WITH_KERNEL=0
+
+while (( $# )); do
+    case "$1" in
+        --kernel) WITH_KERNEL=1; shift ;;
+        --swapfile) SWAPFILE="$2"; shift 2 ;;
+        --swap-size-gb) SWAPSIZE_GB="$2"; shift 2 ;;
+        -h|--help) sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) echo "Usage: $0 [--kernel] [--swapfile PATH] [--swap-size-gb N]" >&2; exit 2 ;;
+    esac
+done
+
+if (( WITH_KERNEL )); then
+    echo "==> Installing latest HWE kernel"
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y linux-generic-hwe-24.04
+fi
+
+MEM_KB="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)"
+MEM_GB=$(( (MEM_KB + 1024 * 1024 - 1) / (1024 * 1024) ))
+if [[ -z "$SWAPSIZE_GB" ]]; then
+    SWAPSIZE_GB=$(( MEM_GB + 2 ))
+fi
+echo "==> RAM is ${MEM_GB}G, swapfile target is ${SWAPSIZE_GB}G ($SWAPFILE)"
+
+FSTYPE="$(findmnt -no FSTYPE / || echo unknown)"
+# NOTE: capture swapon output first - `swapon | grep -q` under pipefail can
+# misfire when grep exits early and swapon dies on SIGPIPE.
+SWAPONS="$(swapon --show=NAME --noheadings 2>/dev/null || true)"
+if [[ "$FSTYPE" == "btrfs" ]]; then
+    echo "==> btrfs root: creating NOCOW swapfile"
+    if ! grep -qx "$SWAPFILE" <<<"$SWAPONS"; then
+        swapoff "$SWAPFILE" 2>/dev/null || true
+        rm -f "$SWAPFILE"
+        # NOCOW must be set on an empty file before any data hits it.
+        truncate -s 0 "$SWAPFILE"
+        chattr +C "$SWAPFILE"
+        # NOTE: no fallocate on btrfs - must be dd-written.
+        dd if=/dev/zero of="$SWAPFILE" bs=1G count="$SWAPSIZE_GB" status=progress
+        chmod 600 "$SWAPFILE"
+        mkswap "$SWAPFILE"
+        swapon "$SWAPFILE"
+    else
+        echo "    $SWAPFILE already active, keeping it"
+    fi
+else
+    echo "==> $FSTYPE root: creating swapfile"
+    if ! grep -qx "$SWAPFILE" <<<"$SWAPONS"; then
+        swapoff "$SWAPFILE" 2>/dev/null || true
+        rm -f "$SWAPFILE"
+        fallocate -l "${SWAPSIZE_GB}G" "$SWAPFILE"
+        chmod 600 "$SWAPFILE"
+        mkswap "$SWAPFILE"
+        swapon "$SWAPFILE"
+    else
+        echo "    $SWAPFILE already active, keeping it"
+    fi
+fi
+
+if ! grep -qs "^${SWAPFILE}[[:space:]]" /etc/fstab; then
+    echo "$SWAPFILE none swap sw 0 0" >> /etc/fstab
+    echo "    fstab entry added"
+fi
+
+echo "==> resume= kernel parameters"
+ROOT_UUID="$(findmnt -no UUID /)"
+OFFSET=""
+if [[ "$FSTYPE" == "btrfs" ]]; then
+    OFFSET="$(btrfs inspect-internal map-swapfile -r "$SWAPFILE" 2>/dev/null || true)"
+fi
+if [[ -z "$ROOT_UUID" ]]; then
+    echo "    WARNING: cannot determine root UUID, skipping resume= setup" >&2
+else
+    RESUME_ARGS="resume=UUID=${ROOT_UUID}"
+    [[ -n "$OFFSET" ]] && RESUME_ARGS+=" resume_offset=${OFFSET}"
+    echo "    $RESUME_ARGS"
+    if grep -q 'GRUB_CMDLINE_LINUX_DEFAULT=' /etc/default/grub; then
+        python3 - "$RESUME_ARGS" <<'EOF'
+import re, sys
+args = sys.argv[1].split()
+with open("/etc/default/grub") as f:
+    content = f.read()
+m = re.search(r'GRUB_CMDLINE_LINUX_DEFAULT="([^"]*)"', content)
+current = m.group(1).split()
+current = [c for c in current if not c.startswith("resume") and c != "resume_offset"]
+current += args
+content = content.replace(m.group(0), 'GRUB_CMDLINE_LINUX_DEFAULT="' + " ".join(current) + '"')
+with open("/etc/default/grub", "w") as f:
+    f.write(content)
+EOF
+    else
+        echo "GRUB_CMDLINE_LINUX_DEFAULT=\"$RESUME_ARGS\"" >> /etc/default/grub
+    fi
+    mkdir -p /etc/initramfs-tools/conf.d
+    echo "RESUME=UUID=${ROOT_UUID}" > /etc/initramfs-tools/conf.d/resume
+    update-grub
+    update-initramfs -u -k all
+fi
+
+echo "==> NVIDIA suspend/power options (driver patch config)"
+cat > /etc/modprobe.d/99-xfcetweaks-nvidia-pm.conf <<'EOF'
+# XFCETweaks: keep dGPU VRAM across suspend/hibernate, allow fine-grained
+# D3cold runtime PM so `gpu off` parks the card at ~0 W without closing apps.
+options nvidia NVreg_PreserveVideoMemoryAllocations=1 NVreg_TemporaryFilePath=/var/tmp
+options nvidia NVreg_DynamicPowerManagement=0x02
+EOF
+# Rebuild initramfs so the options apply at early boot too.
+update-initramfs -u -k all 2>/dev/null || update-initramfs -u || true
+
+echo "==> systemd hibernation policy"
+mkdir -p /etc/systemd/sleep.conf.d
+cat > /etc/systemd/sleep.conf.d/10-xfcetweaks-hibernate.conf <<'EOF'
+[Sleep]
+AllowHibernation=yes
+AllowHybridSleep=yes
+HibernateMode=platform shutdown
+HibernateState=disk
+EOF
+systemctl daemon-reload 2>/dev/null || true
+
+echo "Done. Reboot, then run: hibernate --check"

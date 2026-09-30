@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# charger-watch - run battery-guard the moment a power_supply uevent lands.
+#
+# Neither a udev SYSTEMD_USER_WANTS rule (only honored when a device
+# appears, not on "change") nor a systemd .path unit (sysfs attributes
+# never raise inotify events) fires on plug/unplug, which left the OSD
+# waiting for the 30 s battery-guard.timer. udev's netlink monitor is
+# readable by the user, so listen to it directly.
+#
+# battery-guard runs in-line: events that arrive during its debounce queue
+# in the pipe and are handled afterwards, so fast plug cycles are not lost.
+set -u
+
+guard="$HOME/.local/bin/battery-guard"
+
+"$guard"  # catch anything that changed before we were listening
+
+stdbuf -oL udevadm monitor --udev --subsystem-match=power_supply |
+    while IFS= read -r line; do
+        [[ "$line" == UDEV* ]] || continue
+        "$guard"
+    done
