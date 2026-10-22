@@ -1,0 +1,138 @@
+--- a/panel-plugins/power-manager-plugin/power-manager-button.c	2026-10-22 09:34:28.863458397 +0200
++++ b/panel-plugins/power-manager-plugin/power-manager-button.c	2026-10-22 09:34:28.883954572 +0200
+@@ -1559,6 +1559,125 @@
+ #endif
+ 
+ 
++/* Fast charge: Lenovo/IdeaPad EC "Fast" entry of the battery charge_types
++ * attribute. The row is only shown where the kernel lists it; the actual
++ * switching is delegated to the smart-charge helper (persistence, sudo,
++ * notification), so this code never writes to sysfs itself. */
++static gchar *
++fast_charge_find_attr (void)
++{
++  GDir *dir;
++  const gchar *name;
++  gchar *found = NULL;
++
++  dir = g_dir_open ("/sys/class/power_supply", 0, NULL);
++  if (dir == NULL)
++    return NULL;
++
++  while (found == NULL && (name = g_dir_read_name (dir)) != NULL)
++  {
++    gchar *type_path = g_build_filename ("/sys/class/power_supply", name, "type", NULL);
++    gchar *attr_path = g_build_filename ("/sys/class/power_supply", name, "charge_types", NULL);
++    gchar *type = NULL, *types = NULL;
++
++    if (g_file_get_contents (type_path, &type, NULL, NULL) &&
++        g_str_has_prefix (type, "Battery") &&
++        g_file_get_contents (attr_path, &types, NULL, NULL) &&
++        strstr (types, "Fast") != NULL)
++      found = g_strdup (attr_path);
++
++    g_free (type_path);
++    g_free (attr_path);
++    g_free (type);
++    g_free (types);
++  }
++
++  g_dir_close (dir);
++  return found;
++}
++
++static gboolean
++fast_charge_is_active (const gchar *attr_path)
++{
++  gchar *types = NULL;
++  gboolean active;
++
++  if (!g_file_get_contents (attr_path, &types, NULL, NULL))
++    return FALSE;
++
++  active = strstr (types, "[Fast]") != NULL;
++  g_free (types);
++  return active;
++}
++
++static void
++fast_charge_set (gboolean on)
++{
++  gchar *tool = g_build_filename (g_get_home_dir (), ".local", "bin", "smart-charge", NULL);
++  gchar *argv[] = { tool, "fast", on ? "on" : "off", NULL };
++
++  if (!g_file_test (tool, G_FILE_TEST_IS_EXECUTABLE))
++    argv[0] = "smart-charge";
++
++  g_spawn_async (NULL, argv, NULL,
++                 G_SPAWN_SEARCH_PATH | G_SPAWN_STDOUT_TO_DEV_NULL | G_SPAWN_STDERR_TO_DEV_NULL,
++                 NULL, NULL, NULL, NULL);
++  g_free (tool);
++}
++
++#ifdef XFCE_PLUGIN
++static void
++fast_charge_switch_cb (GObject *sw, GParamSpec *pspec, gpointer user_data)
++{
++  fast_charge_set (gtk_switch_get_active (GTK_SWITCH (sw)));
++}
++#else
++static void
++fast_charge_toggled_cb (GtkCheckMenuItem *mi, gpointer user_data)
++{
++  fast_charge_set (gtk_check_menu_item_get_active (mi));
++}
++#endif
++
++static void
++power_manager_button_add_fast_charge (GtkWidget *menu)
++{
++  GtkWidget *mi;
++  gchar *attr = fast_charge_find_attr ();
++  gboolean active;
++#ifdef XFCE_PLUGIN
++  GtkWidget *box, *label, *sw;
++#endif
++
++  if (attr == NULL)
++    return;
++
++  active = fast_charge_is_active (attr);
++  g_free (attr);
++
++#ifdef XFCE_PLUGIN
++  mi = gtk_menu_item_new ();
++  box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
++  label = gtk_label_new_with_mnemonic (_("Fast _charge"));
++  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
++  sw = gtk_switch_new ();
++  gtk_switch_set_active (GTK_SWITCH (sw), active);
++  gtk_box_pack_start (GTK_BOX (box), label, TRUE, TRUE, 0);
++  gtk_box_pack_start (GTK_BOX (box), sw, FALSE, FALSE, 0);
++  gtk_container_add (GTK_CONTAINER (mi), box);
++  g_signal_connect (G_OBJECT (mi), "activate", G_CALLBACK (power_manager_button_toggle_presentation_mode), sw);
++  /* connect after the initial state is set so opening the menu never toggles */
++  g_signal_connect (G_OBJECT (sw), "notify::active", G_CALLBACK (fast_charge_switch_cb), NULL);
++#else
++  mi = gtk_check_menu_item_new_with_mnemonic (_("Fast _charge"));
++  gtk_check_menu_item_set_active (GTK_CHECK_MENU_ITEM (mi), active);
++  g_signal_connect (G_OBJECT (mi), "toggled", G_CALLBACK (fast_charge_toggled_cb), NULL);
++#endif
++  gtk_widget_show_all (mi);
++  gtk_menu_shell_append (GTK_MENU_SHELL (menu), mi);
++}
++
++
+ void
+ power_manager_button_show_menu (PowerManagerButton *button)
+ {
+@@ -1658,6 +1777,9 @@
+   gtk_widget_show_all (mi);
+   gtk_menu_shell_append (GTK_MENU_SHELL (menu), mi);
+ 
++  /* Fast charge switch - only where the battery supports it */
++  power_manager_button_add_fast_charge (menu);
++
+   /* Show any applications currently inhibiting now */
+   display_inhibitors (button, menu);
+ 

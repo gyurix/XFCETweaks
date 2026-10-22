@@ -2,5 +2,9 @@
 %sudo ALL=(root) NOPASSWD: /usr/local/bin/gpu-power *
 %sudo ALL=(root) NOPASSWD: /usr/local/bin/hibernate-setup *
 %sudo ALL=(root) NOPASSWD: /usr/local/bin/brightness-step *
+%sudo ALL=(root) NOPASSWD: /usr/bin/tee /sys/bus/platform/drivers/ideapad_acpi/*/conservation_mode
+%sudo ALL=(root) NOPASSWD: /usr/bin/tee /sys/class/power_supply/BAT*/charge_types
+%sudo ALL=(root) NOPASSWD: /usr/bin/tee /var/lib/XFCETweaks/smart-charge.*
+%sudo ALL=(root) NOPASSWD: /bin/mkdir -p /var/lib/XFCETweaks
 %sudo ALL=(root) NOPASSWD: /usr/bin/systemctl hibernate
 %sudo ALL=(root) NOPASSWD: /usr/bin/systemctl suspend

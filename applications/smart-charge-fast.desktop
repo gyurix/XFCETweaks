@@ -1,0 +1,18 @@
+[Desktop Entry]
+Type=Application
+Name=Fast Charge
+Comment=Toggle fast battery charging (replaces the 80% cap while on)
+Exec=smart-charge fast toggle
+Icon=battery-good-charging-symbolic
+Terminal=false
+Categories=Settings;HardwareSettings;
+Actions=On;Off;
+Keywords=battery;charge;fast;rapid;power;
+
+[Desktop Action On]
+Name=Fast charge on
+Exec=smart-charge fast on
+
+[Desktop Action Off]
+Name=Fast charge off
+Exec=smart-charge fast off

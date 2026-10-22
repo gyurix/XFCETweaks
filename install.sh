@@ -36,12 +36,36 @@ find "$REPO/bin" -maxdepth 1 -type f -exec install -m 0755 {} "$HOME/.local/bin/
 find "$REPO/libexec" -maxdepth 1 -type f -exec install -m 0755 {} "$HOME/.local/libexec/" \;
 python3 -m compileall -q "$HOME/.local/bin/osd-badge" "$HOME/.local/libexec" || true
 
+echo "==> Menu entries -> ~/.local/share/applications"
+mkdir -p "$HOME/.local/share/applications"
+find "$REPO/applications" -maxdepth 1 -name '*.desktop' -exec install -m 0644 {} "$HOME/.local/share/applications/" \;
+update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
+
 echo "==> Root helpers -> /usr/local/bin"
 sudo install -m 0755 "$REPO"/sbin/brightness-step /usr/local/bin/brightness-step
 sudo install -m 0755 "$REPO"/sbin/battery-shutdown-countdown /usr/local/bin/battery-shutdown-countdown
 sudo install -m 0755 "$REPO"/sbin/gpu-power /usr/local/bin/gpu-power
 sudo install -m 0440 "$REPO"/sudoers.d/xfcetweaks-gpu /etc/sudoers.d/xfcetweaks-gpu
 sudo install -m 0755 "$REPO"/sbin/hibernate-setup /usr/local/bin/hibernate-setup
+sudo install -m 0755 "$REPO"/sbin/smart-charge-apply /usr/local/bin/smart-charge-apply
+# Battery cap persistence: the EC forgets the limit across reboot/power
+# loss, so re-apply the saved smart-charge preference at boot. Seed the
+# preference from the live EC state so a reinstall never flips the cap.
+sudo install -m 0644 "$REPO"/systemd/system/smart-charge.service /etc/systemd/system/smart-charge.service
+sudo mkdir -p /var/lib/XFCETweaks
+if [[ ! -f /var/lib/XFCETweaks/smart-charge.mode ]]; then
+    live="off"
+    for bat in /sys/class/power_supply/*; do
+        [[ "$(cat "$bat/type" 2>/dev/null || true)" == "Battery" ]] || continue
+        [[ -e "$bat/charge_types" ]] || continue
+        grep -q '\[Long_Life\]' "$bat/charge_types" 2>/dev/null && live="on"
+        grep -q '\[Fast\]' "$bat/charge_types" 2>/dev/null && live="fast"
+        break
+    done
+    printf '%s' "$live" | sudo tee /var/lib/XFCETweaks/smart-charge.mode >/dev/null
+fi
+sudo systemctl daemon-reload
+sudo systemctl enable --now smart-charge.service 2>/dev/null || sudo systemctl enable smart-charge.service
 
 echo "==> udev / modprobe / sleep / sudoers config"
 sudo install -m 0644 "$REPO"/modprobe/99-xfcetweaks-nvidia-pm.conf /etc/modprobe.d/99-xfcetweaks-nvidia-pm.conf

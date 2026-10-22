@@ -1,0 +1,10 @@
+[Unit]
+Description=Re-apply Lenovo battery charge limit (smart-charge)
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/smart-charge-apply
+
+[Install]
+WantedBy=multi-user.target

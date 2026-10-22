@@ -1,11 +1,186 @@
 #!/usr/bin/env bash
+# smart-charge - Lenovo battery care: cap charging at 75-80%, or fast charge.
+#
+# Primary control is the battery charge_types (Long_Life). The kernel
+# deprecated conservation_mode for the same EC bit, so it stays only as
+# a fallback on old kernels. Do NOT mix in other limiters.
+#
+# The EC forgets the setting across reboot/power loss, so on/off is saved
+# to /var/lib/XFCETweaks/smart-charge.mode and re-applied at boot by
+# smart-charge.service. The EC also holds above the threshold instead of
+# draining: enabling at 83% keeps 83%, it just stops charging further.
+#
+# "fast" selects the EC Fast charge type instead. The EC holds a single
+# charge type, so fast and the 80% cap are mutually exclusive: enabling
+# one replaces the other.
 set -euo pipefail
-control=/sys/devices/pci0000:00/0000:00:1f.0/PNP0C09:00/VPC2004:00/conservation_mode
+
+PREF_DIR=/var/lib/XFCETweaks
+PREF_MODE=$PREF_DIR/smart-charge.mode
+PREF_PREV=$PREF_DIR/smart-charge.prev
+
+find_battery() {
+    local b
+    for b in /sys/class/power_supply/*; do
+        [[ "$(cat "$b/type" 2>/dev/null || true)" == "Battery" ]] || continue
+        [[ -e "$b/charge_types" ]] && { printf '%s' "$b"; return 0; }
+    done
+    return 1
+}
+
+find_conservation() {
+    local c
+    for c in /sys/bus/platform/drivers/ideapad_acpi/*/conservation_mode; do
+        [[ -e "$c" ]] && { printf '%s' "$c"; return 0; }
+    done
+    return 1
+}
+
+# Prints the active charge type (brackets stripped), e.g. Long_Life.
+active_type() { # $1 = BAT dir
+    local tok
+    for tok in $(cat "$1/charge_types"); do
+        case "$tok" in
+            \[*\]) tok="${tok#[}"; printf '%s' "${tok%]}"; return 0 ;;
+        esac
+    done
+    return 1
+}
+
+type_available() { # $1 = BAT dir, $2 = type
+    grep -qw "$2" "$1/charge_types" 2>/dev/null
+}
+
+write_sysfs() { # $1 = file, $2 = value (direct, else passwordless sudo)
+    if { printf '%s' "$2" > "$1"; } 2>/dev/null; then
+        return 0
+    fi
+    printf '%s' "$2" | sudo tee "$1" >/dev/null
+}
+
+save_pref() { # $1 = file, $2 = value
+    if { printf '%s' "$2" > "$1"; } 2>/dev/null; then
+        return 0
+    fi
+    sudo mkdir -p "$PREF_DIR" 2>/dev/null || true
+    printf '%s' "$2" | sudo tee "$1" >/dev/null
+}
+
+read_state() {
+    local bat
+    if bat="$(find_battery || true)"; [[ -n "${bat:-}" ]]; then
+        [[ "$(active_type "$bat" || true)" == "Long_Life" ]] && printf '1' || printf '0'
+        return 0
+    fi
+    local c
+    if c="$(find_conservation || true)"; [[ -n "${c:-}" ]]; then
+        tr -d ' \t\r\n' < "$c"
+        return 0
+    fi
+    echo "smart-charge: no charge control found" >&2
+    return 1
+}
+
+apply_on() {
+    local bat cur
+    if bat="$(find_battery || true)"; [[ -n "${bat:-}" ]]; then
+        cur="$(active_type "$bat" || true)"
+        [[ "$cur" != "Long_Life" && -n "$cur" ]] && save_pref "$PREF_PREV" "$cur"
+        write_sysfs "$bat/charge_types" "Long_Life"
+        save_pref "$PREF_MODE" "on"
+        return 0
+    fi
+    local c
+    if c="$(find_conservation || true)"; [[ -n "${c:-}" ]]; then
+        write_sysfs "$c" "1"
+        save_pref "$PREF_MODE" "on"
+        return 0
+    fi
+    echo "smart-charge: no charge control found" >&2
+    return 1
+}
+
+apply_off() {
+    local bat prev="Standard"
+    if bat="$(find_battery || true)"; [[ -n "${bat:-}" ]]; then
+        prev="Standard"
+        [[ -r "$PREF_PREV" ]] && prev="$(tr -d ' \t\r\n' < "$PREF_PREV")"
+        [[ -z "$prev" ]] && prev="Standard"
+        type_available "$bat" "$prev" || prev="Standard"
+        write_sysfs "$bat/charge_types" "$prev"
+        save_pref "$PREF_MODE" "off"
+        return 0
+    fi
+    local c
+    if c="$(find_conservation || true)"; [[ -n "${c:-}" ]]; then
+        write_sysfs "$c" "0"
+        save_pref "$PREF_MODE" "off"
+        return 0
+    fi
+    echo "smart-charge: no charge control found" >&2
+    return 1
+}
+
+read_fast_state() {
+    local bat
+    bat="$(find_battery || true)"
+    [[ -n "$bat" ]] || { echo "smart-charge: no charge_types control found" >&2; return 1; }
+    [[ "$(active_type "$bat" || true)" == "Fast" ]] && printf '1' || printf '0'
+}
+
+apply_fast() {
+    local bat cur
+    bat="$(find_battery || true)"
+    if [[ -z "$bat" ]] || ! type_available "$bat" "Fast"; then
+        echo "smart-charge: Fast charge type not supported here" >&2
+        return 1
+    fi
+    cur="$(active_type "$bat" || true)"
+    [[ "$cur" != "Fast" && "$cur" != "Long_Life" && -n "$cur" ]] && save_pref "$PREF_PREV" "$cur"
+    write_sysfs "$bat/charge_types" "Fast"
+    save_pref "$PREF_MODE" "fast"
+}
+
+notify_fast() { # $1 = 0|1
+    local msg
+    [[ "$1" == "1" ]] && msg="Fast charge on" || msg="Fast charge off - standard charging"
+    if command -v notify-send >/dev/null 2>&1; then
+        /usr/bin/notify-send --app-name="Battery" --urgency=low \
+            --icon=battery-good-charging-symbolic "$msg" >/dev/null 2>&1 || true
+    fi
+    echo "$msg"
+}
+
+notify_state() { # $1 = 0|1
+    local msg
+    if [[ "$1" == "1" ]]; then
+        msg="Preservation on - charging capped at 80%"
+    else
+        msg="Preservation off - charging to 100%"
+    fi
+    if command -v notify-send >/dev/null 2>&1; then
+        /usr/bin/notify-send --app-name="Battery" --urgency=low \
+            --icon=battery-good-symbolic "$msg" >/dev/null 2>&1 || true
+    fi
+    echo "$msg"
+}
+
 case "${1:-status}" in
-  on)  printf 1 | sudo -n tee "$control" >/dev/null ;;
-  off) printf 0 | sudo -n tee "$control" >/dev/null ;;
+  on)  apply_on; notify_state 1 ;;
+  off) apply_off; notify_state 0 ;;
   toggle)
-    if [ "$(cat "$control")" = 1 ]; then "$0" off; else "$0" on; fi ;;
-  status) cat "$control" ;;
-  *) echo "Usage: $0 {on|off|toggle|status}" >&2; exit 2 ;;
+    if [[ "$(read_state)" == "1" ]]; then apply_off; notify_state 0;
+    else apply_on; notify_state 1; fi ;;
+  status) read_state; echo ;;
+  fast)
+    case "${2:-toggle}" in
+      on)  apply_fast; notify_fast 1 ;;
+      off) apply_off; notify_fast 0 ;;
+      toggle)
+        if [[ "$(read_fast_state)" == "1" ]]; then apply_off; notify_fast 0;
+        else apply_fast; notify_fast 1; fi ;;
+      status) read_fast_state; echo ;;
+      *) echo "Usage: $0 fast {on|off|toggle|status}" >&2; exit 2 ;;
+    esac ;;
+  *) echo "Usage: $0 {on|off|toggle|status|fast [on|off|toggle|status]}" >&2; exit 2 ;;
 esac

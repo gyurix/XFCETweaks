@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# smart-charge-apply - boot-time re-apply of the battery charge cap.
+# Runs as root from smart-charge.service: the EC forgets the limit
+# across reboot/power loss, so restore the saved preference.
+# Never fails the boot: unknown layouts are left alone.
+set -u
+
+PREF=/var/lib/XFCETweaks/smart-charge.mode
+mode=""
+[[ -r "$PREF" ]] && mode="$(tr -d ' \t\r\n' < "$PREF")"
+case "$mode" in
+    on)   want=Long_Life ;;
+    off)  want=Standard ;;
+    fast) want=Fast ;;
+    *)    exit 0 ;;
+esac
+
+for bat in /sys/class/power_supply/*; do
+    [[ "$(cat "$bat/type" 2>/dev/null || true)" == "Battery" ]] || continue
+    [[ -e "$bat/charge_types" ]] || continue
+    grep -qw "$want" "$bat/charge_types" 2>/dev/null || continue
+    printf '%s' "$want" > "$bat/charge_types" 2>/dev/null || true
+    # Mirror into the deprecated alias while it still exists.
+    for c in /sys/bus/platform/drivers/ideapad_acpi/*/conservation_mode; do
+        [[ -e "$c" ]] || continue
+        [[ "$mode" == on ]] && printf 1 > "$c" 2>/dev/null \
+                             || printf 0 > "$c" 2>/dev/null
+    done
+    exit 0
+done
+
+for c in /sys/bus/platform/drivers/ideapad_acpi/*/conservation_mode; do
+    [[ -e "$c" ]] || continue
+    [[ "$mode" == on ]] && printf 1 > "$c" 2>/dev/null \
+                         || printf 0 > "$c" 2>/dev/null
+    exit 0
+done
+exit 0
