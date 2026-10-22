@@ -1,38 +1,57 @@
 #!/bin/sh
-# Toggle show-desktop, implemented manually window-by-window.
-# Reason: Wine windows (e.g. Mailbird) ignore the EWMH _NET_SHOWING_DESKTOP
-# broadcast (`wmctrl -k on`), and xfwm4 cancels showing-desktop as soon as
-# any window is touched while it is active -- so leftovers cannot be
-# force-minimized afterwards. Minimizing every visible window ourselves
-# (xdotool windowminimize works on both native and Wine windows) avoids
-# both problems.
 STATE_DIR="${XDG_RUNTIME_DIR:-/tmp}/toggle-desktop"
 ACTIVE="$STATE_DIR/active"
 IDS="$STATE_DIR/windows"
 FOCUS="$STATE_DIR/focus"
+LOCK="$STATE_DIR/lock"
+LAST="$STATE_DIR/last"
 
-window_type() {
-    xprop -id "$1" _NET_WM_WINDOW_TYPE 2>/dev/null
+mkdir -p "$STATE_DIR" 2>/dev/null
+if ! exec 9>"$LOCK"; then
+    exit 0
+fi
+if ! flock -n 9 2>/dev/null; then
+    exit 0
+fi
+
+now=$(date +%s%N 2>/dev/null)
+case "$now" in
+    ''|*[!0-9]*) now="" ;;
+esac
+if [ -n "$now" ] && [ -f "$LAST" ]; then
+    last=$(cat "$LAST" 2>/dev/null)
+    case "$last" in
+        ''|*[!0-9]*) ;;
+        *) [ "$((now - last))" -lt 400000000 ] && exit 0 ;;
+    esac
+fi
+[ -n "$now" ] && printf '%s' "$now" > "$LAST" 2>/dev/null
+
+info_of() {
+    xprop -id "$1" _NET_WM_WINDOW_TYPE WM_STATE _NET_WM_DESKTOP 2>/dev/null
 }
 
-is_minimizable() {
-    window_type "$1" | grep -q -E '_NET_WM_WINDOW_TYPE_(NORMAL|DIALOG|UTILITY)'
+is_minimizable_info() {
+    case "$1" in
+        *_NET_WM_WINDOW_TYPE_NORMAL*|*_NET_WM_WINDOW_TYPE_DIALOG*|*_NET_WM_WINDOW_TYPE_UTILITY*) return 0 ;;
+    esac
+    return 1
 }
 
-is_normal_state() {
-    xprop -id "$1" WM_STATE 2>/dev/null | grep -q 'window state: Normal'
+is_normal_info() {
+    case "$1" in
+        *'window state: Normal'*) return 0 ;;
+    esac
+    return 1
 }
 
 window_exists() {
-    xprop -id "$1" WM_STATE >/dev/null 2>&1
-}
-
-current_desktop() {
-    xprop -root _NET_CURRENT_DESKTOP 2>/dev/null | awk '{print $NF}'
+    xprop -id "$1" WM_STATE >/dev/null 2>&1 && return 0
+    xprop -id "$1" WM_CLASS >/dev/null 2>&1
 }
 
 window_desktop() {
-    xprop -id "$1" _NET_WM_DESKTOP 2>/dev/null | awk '{print $NF}'
+    info_of "$1" | sed -n 's/^_NET_WM_DESKTOP.* = \([0-9]*\).*/\1/p' | head -n 1
 }
 
 to_hex() {
@@ -43,21 +62,67 @@ to_hex() {
     esac
 }
 
+on_current_desk() {
+    wdesk=$(window_desktop "$1")
+    case "$wdesk" in
+        '') return 0 ;;
+        "$2"|0xFFFFFFFF|4294967295) return 0 ;;
+    esac
+    return 1
+}
+
+collect_targets() {
+    tmp="$IDS.tmp"
+    : > "$tmp" 2>/dev/null
+    desk=$(xprop -root _NET_CURRENT_DESKTOP 2>/dev/null | awk '{print $NF}')
+    wmctrl -l 2>/dev/null | awk '{print $1}' | while read -r id; do
+        [ -n "$id" ] || continue
+        info=$(info_of "$id") || continue
+        is_minimizable_info "$info" || continue
+        is_normal_info "$info" || continue
+        on_current_desk "$id" "$desk" || continue
+        printf '%s\n' "$id" >> "$tmp"
+    done
+    mv -f "$tmp" "$IDS" 2>/dev/null
+}
+
+minimize_list() {
+    while read -r id; do
+        [ -n "$id" ] || continue
+        xdotool windowminimize "$id" >/dev/null 2>&1
+    done < "$1"
+    while read -r id; do
+        [ -n "$id" ] || continue
+        info=$(info_of "$id" 2>/dev/null) || continue
+        is_normal_info "$info" || continue
+        sleep 0.05
+        xdotool windowminimize "$id" >/dev/null 2>&1
+    done < "$1"
+}
+
+restore_list() {
+    while read -r id; do
+        [ -n "$id" ] || continue
+        window_exists "$id" || continue
+        xdotool windowmap "$id" >/dev/null 2>&1
+        wmctrl -i -r "$id" -b remove,hidden >/dev/null 2>&1
+        if xprop -id "$id" WM_CLASS 2>/dev/null | grep -q '\.exe"'; then
+            wmctrl -i -a "$id" >/dev/null 2>&1
+        fi
+    done < "$1"
+}
+
 if [ -f "$ACTIVE" ]; then
-    # --- restore desktop ---
     rm -f "$ACTIVE"
     if [ -f "$IDS" ]; then
+        restore_list "$IDS"
         while read -r id; do
             [ -n "$id" ] || continue
+            info=$(info_of "$id" 2>/dev/null) || continue
+            is_normal_info "$info" && continue
             window_exists "$id" || continue
-            # windowmap revives Withdrawn (Wine) windows; remove,hidden
-            # un-minimizes Iconic ones. Both are harmless no-ops otherwise.
-            xdotool windowmap --sync "$id" >/dev/null 2>&1
+            xdotool windowmap "$id" >/dev/null 2>&1
             wmctrl -i -r "$id" -b remove,hidden >/dev/null 2>&1
-            # Iconic Wine windows additionally need an activation to map.
-            if xprop -id "$id" WM_CLASS 2>/dev/null | grep -q '\.exe"'; then
-                wmctrl -i -a "$id" >/dev/null 2>&1
-            fi
         done < "$IDS"
         rm -f "$IDS"
     fi
@@ -70,33 +135,19 @@ if [ -f "$ACTIVE" ]; then
         fi
     fi
 else
-    # --- show desktop ---
     mkdir -p "$STATE_DIR"
     focus=$(to_hex "$(xdotool getactivewindow 2>/dev/null)")
-    if [ -n "$focus" ] && is_minimizable "$focus"; then
-        printf '%s' "$focus" > "$FOCUS"
+    if [ -n "$focus" ]; then
+        info=$(info_of "$focus" 2>/dev/null) || info=""
+        if is_minimizable_info "$info"; then
+            printf '%s' "$focus" > "$FOCUS"
+        else
+            rm -f "$FOCUS"
+        fi
     else
         rm -f "$FOCUS"
     fi
-    desk=$(current_desktop)
-    : > "$IDS"
-    wmctrl -l 2>/dev/null | awk '{print $1}' | while read -r id; do
-        wdesk=$(window_desktop "$id")
-        case "$wdesk" in
-            "$desk"|0xFFFFFFFF|4294967295) ;;
-            *) continue ;;
-        esac
-        is_minimizable "$id" || continue
-        is_normal_state "$id" || continue
-        printf '%s\n' "$id" >> "$IDS"
-    done
-    # Minimize after collecting: WM_CHANGE_STATE is honored by Wine too,
-    # unlike _NET_SHOWING_DESKTOP.
-    if [ -f "$IDS" ]; then
-        while read -r id; do
-            [ -n "$id" ] || continue
-            xdotool windowminimize "$id" >/dev/null 2>&1
-        done < "$IDS"
-    fi
+    collect_targets
+    [ -f "$IDS" ] && minimize_list "$IDS"
     : > "$ACTIVE"
 fi

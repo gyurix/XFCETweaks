@@ -52,32 +52,30 @@ save_state() {
 
 # Native bar (int:value) + glyph+percent badge icon.
 charge_notify() {
-    local summary="$1" pct="$2" level tag
+    local summary="$1" pct="$2" icon
+    [[ "$pct" =~ ^[0-9]+$ ]] || return 0
     (( pct > 100 )) && pct=100
-    level=$(( (pct / 10) * 10 ))
-    if [[ "$on_ac" == "1" && "$level" -ge 100 ]]; then
-        tag="full"
-    elif [[ "$on_ac" == "1" ]]; then
-        tag="c$level"
-    else
-        tag="d$level"
-    fi
     # osd-badge picks charging vs discharging from the status argument, so
-    # derive it from on_ac like $tag: right after a plug event sysfs status
+    # derive it from on_ac: right after a plug event sysfs status
     # can still read "Discharging", and a mismatched name would leave the
-    # notification on a missing (broken-image) icon.
+    # notification on a missing (broken-image) icon with no percentage.
     local badge_status="Discharging"
     [[ "$on_ac" == "1" ]] && badge_status="Charging"
-    # One badge per exact percent: the number is baked into the image, so
-    # a coarser cache key would show a stale value (38% badge at 35%).
-    [[ -f "$HOME/.local/share/icons/hicolor/48x48/status/osd-chg-$tag-$pct.png" ]] \
-        || $HOME/.local/bin/osd-badge chg "$pct" "$badge_status" > /dev/null
+    # Use the icon name osd-badge actually generated instead of
+    # reconstructing the tag by hand (full vs c100 drift = broken image,
+    # which hides the baked-in percentage). One badge per exact percent:
+    # the number is baked into the image, so a coarser cache key would
+    # show a stale value (38% badge at 35%).
+    icon="$($HOME/.local/bin/osd-badge chg "$pct" "$badge_status" 2>/dev/null)" || return 0
+    [[ -n "$icon" ]] || return 0
     /usr/bin/notify-send \
         --app-name="Charger" \
         --urgency=low \
+        --replace-id=91211 \
         --hint="int:value:$pct" \
-        --icon="osd-chg-$tag-$pct" \
-        "$summary ${2}%" >/dev/null 2>&1 || true
+        --hint="string:x-canonical-private-synchronous:charger" \
+        --icon="$icon" \
+        "$summary $pct%" >/dev/null 2>&1 || true
 }
 
 # Debounce: the EC can flap online 1->0->1 on a loose barrel jack.

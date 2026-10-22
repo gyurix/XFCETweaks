@@ -9,12 +9,13 @@ echo "==> Installing packages (skip with SKIP_APT=1)"
 if [[ "${SKIP_APT:-0}" != "1" ]]; then
     sudo apt-get update
     sudo apt-get install -y \
-        xdotool wmctrl x11-utils imagemagick libnotify-bin \
+        xdotool wmctrl x11-utils imagemagick libnotify-bin xcape \
+        xfce4-whiskermenu-plugin \
         python3-gi python3-gi-cairo python3-pil python3-dbus \
         libxtst6 libxi6 \
         adwaita-icon-theme fonts-dejavu \
         fonts-symbola fonts-noto-extra fonts-jetbrains-mono \
-        xfce4-power-manager xfce4-notifyd upower \
+        xfce4-power-manager xfce4-notifyd upower fwupd \
         pipewire-pulse wireplumber
 fi
 
@@ -69,6 +70,7 @@ sudo systemctl enable --now smart-charge.service 2>/dev/null || sudo systemctl e
 
 echo "==> udev / modprobe / sleep / sudoers config"
 sudo install -m 0644 "$REPO"/modprobe/99-xfcetweaks-nvidia-pm.conf /etc/modprobe.d/99-xfcetweaks-nvidia-pm.conf
+sudo install -m 0644 "$REPO"/modprobe/nvidia-runtimepm.conf /etc/modprobe.d/nvidia-runtimepm.conf
 sudo mkdir -p /etc/systemd/sleep.conf.d
 sudo install -m 0644 "$REPO"/sleep.conf.d/10-xfcetweaks-hibernate.conf /etc/systemd/sleep.conf.d/10-xfcetweaks-hibernate.conf
 if [[ -d /etc/sudoers.d ]]; then
@@ -133,12 +135,24 @@ echo "==> Sync hicolor index and refresh icon cache"
 "$HOME/.local/bin/hicolor-index-sync"
 gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
 
+echo "==> Panel battery charging icons (level glyph + corner bolt)"
+if "$HOME/.local/bin/panel-battery-icons" | grep -qv "0 icon(s) updated"; then
+    PANEL_RESTART_ICONS=1
+else
+    PANEL_RESTART_ICONS=0
+fi
+
 echo "==> Notification daemon (all OSD/HUD goes through it)"
 if ! pgrep -x xfce4-notifyd >/dev/null 2>&1; then
     setsid /usr/lib/x86_64-linux-gnu/xfce4/notifyd/xfce4-notifyd >/dev/null 2>&1 < /dev/null &
     sleep 1
 fi
 pgrep -x xfce4-notifyd >/dev/null && echo "    xfce4-notifyd running" || echo "    WARNING: xfce4-notifyd not running"
+
+if [[ "${PANEL_RESTART_ICONS:-0}" == "1" ]]; then
+    echo "==> Restarting panel for new battery icons"
+    xfce4-panel -r >/dev/null 2>&1 &
+fi
 
 echo "Done."
 echo ""

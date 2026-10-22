@@ -116,10 +116,11 @@ fi
 
 echo "==> NVIDIA suspend/power options (driver patch config)"
 cat > /etc/modprobe.d/99-xfcetweaks-nvidia-pm.conf <<'EOF'
-# XFCETweaks: keep dGPU VRAM across suspend/hibernate, allow fine-grained
-# D3cold runtime PM so `gpu off` parks the card at ~0 W without closing apps.
+# XFCETweaks: keep dGPU VRAM across suspend/hibernate. Fine-grained D3cold runtime PM
+# (0x02) is disabled: driver 615.71.09 + kernel 7.0 crashed on D3cold wake/unload and on
+# client exit (nvidia_dev_put refcount WARN, GPU hang), 2026-10-16.
 options nvidia NVreg_PreserveVideoMemoryAllocations=1 NVreg_TemporaryFilePath=/var/tmp
-options nvidia NVreg_DynamicPowerManagement=0x02
+options nvidia NVreg_DynamicPowerManagement=0x00
 EOF
 # Rebuild initramfs so the options apply at early boot too.
 update-initramfs -u -k all 2>/dev/null || update-initramfs -u || true

@@ -24,6 +24,8 @@ Built for Linux Mint 22 / XFCE 4.18 on X11. One command to install.
 | | [Hibernate](#hibernate) | Checked, one-command hibernation |
 | | [Smart charge](#smart-charge) | Longer battery life when plugged in all day |
 | | [Show desktop](#show-desktop) | Works with every window, Wine apps included |
+| | [Start menu and shortcuts](#start-menu-and-shortcuts) | Super tap opens the menu, Super+L locks, Alt+Tab keeps previews |
+| | [Panel media popups](#panel-media-popups) | No browser-media notifications from the volume plugin |
 | | [Icon theme guard](#icon-theme-guard) | Start menu and app icons never go missing |
 | | [Terminal fonts](#terminal-fonts) | Spinners and symbols render, no empty boxes |
 
@@ -130,7 +132,11 @@ a second. A loose jack flickering on and off won't spam you.
 timer as a safety net. The charger's `online` flag is the source of
 truth, not the battery status, which also changes for "Full" or
 conservation mode. A 1 s re-check filters out flapping. Badges are drawn
-by `bin/osd-badge` and cached per percent.
+by `bin/osd-badge` and cached per percent; the notification uses the icon
+name `osd-badge` actually generated and replaces the previous one, so
+rapid plug/unplug never stacks popups or shows a broken image. The panel charging icon shows
+the regular level glyph with a small bolt in its bottom-right corner
+(`bin/panel-battery-icons` shadows the theme's full-bolt variants).
 
 </details>
 
@@ -199,6 +205,15 @@ it, or hand it to a virtual machine.
 `bin/gpu` and `sbin/gpu-power` manage the RTX 5070 Laptop GPU. No mode
 kills running apps or moves live GL/Vulkan/CUDA work; `gpu vm` refuses
 while Xorg or anything else uses the GPU.
+
+> **Runtime power management is off by default.** Fine-grained D3cold
+> (`NVreg_DynamicPowerManagement=0x02`) crashed with NVIDIA 615.71.09 on
+> kernel 7.0 (GPU hang on D3cold wake/unload and a `nvidia_dev_put`
+> refcount warning when a client exits). `modprobe/99-xfcetweaks-nvidia-pm.conf`
+> and `modprobe/nvidia-runtimepm.conf` (which masks the packaged file that
+> would otherwise win) now set `0x00`, and `sbin/hibernate-setup` writes the
+> same. Until a driver fixes this, `gpu off` cannot park the card at ~0 W.
+> Re-enable it by setting `0x02` in both files and rebooting.
 
 - **Passthrough (`gpu vm`)** gives the GPU and its HDMI audio exclusively
   to the stopped `tiny10` libvirt VM. Switch from a text console or SSH
@@ -319,7 +334,55 @@ apps like Mailbird that ignore XFCE's built-in version.
 
 `bin/toggle-desktop` minimizes and restores window by window instead of
 using the EWMH show-desktop request, which Wine ignores and xfwm4 cancels
-as soon as a window is touched.
+as soon as a window is touched. A lock plus a 400 ms debounce stop a
+key-repeat or a double press from toggling twice, and minimizing runs a
+second pass over anything that did not take the first time. Only normal
+windows on the current desktop (and sticky ones) are touched.
+
+</details>
+
+### Start menu and shortcuts
+
+Tap Super to open the Whisker start menu. Hold it for shortcuts and the
+menu stays out of the way.
+
+| Keys | Action |
+| --- | --- |
+| Super (tap) | Whisker menu |
+| `Super+D`, `Ctrl+Alt+D` | Show desktop |
+| `Super+L` | Lock the screen |
+| `Alt+Tab`, `Super+Tab` | Window switcher with thumbnails |
+| `Super` + `+` / `-` | Fullscreen zoom |
+
+<details>
+<summary>How it works</summary>
+
+`xfconf/apply.sh` sets the shortcuts. Turning on the custom-shortcut
+override hides every default that is not copied into the custom layer,
+which used to take out `Alt+F1`, `Alt+Tab` and `Alt+F2`. The script now
+mirrors all defaults first, then applies ours. A tap on Super becomes
+`Alt+F1` through `xcape` (autostarted via `~/.config/autostart`), and
+`Alt+F1` is pinned to Whisker because the Mint default points at the old
+applications menu. There is deliberately no custom `Super_L` binding:
+together with xcape it fired the menu twice and it flickered open and
+closed. The script also keeps the panel's first plugin on Whisker with
+hover-to-switch categories, and keeps the thumbnail Alt+Tab cycler
+(`cycle_preview`) from falling back to a plain list.
+
+</details>
+
+### Panel media popups
+
+Firefox media no longer pops up notifications from the panel volume
+plugin.
+
+<details>
+<summary>How it works</summary>
+
+`xfconf/apply.sh` removes Firefox from the PulseAudio plugin's
+`known-players` list, finding the plugin by type because plugin ids shift
+when the layout changes, and clears stale `known-players`/`enable-mpris`
+keys left on recycled ids.
 
 </details>
 
@@ -387,6 +450,9 @@ bin/            user scripts            → ~/.local/bin
 libexec/        screenshot helpers      → ~/.local/libexec
 sbin/           root helpers            → /usr/local/bin
 systemd/user/   background services and PipeWire tweaks
+systemd/system/ boot-time smart-charge restore
+applications/   menu entries                → ~/.local/share/applications
+packaging/      patched xfce4-power-manager (Fast charge switch)
 xfconf/         keyboard shortcuts and power-manager settings
 modprobe/       NVIDIA power options
 sleep.conf.d/   hibernation policy
