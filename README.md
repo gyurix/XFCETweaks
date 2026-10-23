@@ -247,8 +247,8 @@ the panel) toggles it. The EC holds one charge type at a time, so fast
 charge and the 80% cap replace each other; turning fast off returns to
 whatever was active before (the 80% cap comes back if it was on).
 
-The Power Manager battery menu in the panel shows **Battery preservation
-(80%)** and **Fast charge** switches too. Stock xfce4-power-manager has no such hook, so
+The Power Manager battery menu in the panel can show a **Fast charge**
+switch too. Stock xfce4-power-manager has no such hook, so
 `packaging/xfce4-power-manager/build.sh` rebuilds the Mint package with a
 small patch (`INSTALL=1` backs up the stock debs, installs the build and
 restarts the panel). Hold the package afterwards so `apt upgrade` doesn't

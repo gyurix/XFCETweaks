@@ -22,7 +22,11 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk, GdkPixbuf, Gtk
+from gi.repository import Gdk, GdkPixbuf, GLib, Gtk
+
+
+GRAB_RETRY_MS = 30
+GRAB_RETRY_MAX = 330  # ~10 s of holding Print
 
 
 class Cropper(Gtk.Window):
@@ -69,7 +73,9 @@ class Cropper(Gtk.Window):
         self.show_all()
         self.present()
         self.grab_focus()
-        self.grab_input()
+        self.grab_tries = 0
+        if not self.grab_input():
+            GLib.timeout_add(GRAB_RETRY_MS, self.retry_grab)
         window = self.get_window()
         if window is not None:
             cursor = Gdk.Cursor.new_from_name(
@@ -82,12 +88,13 @@ class Cropper(Gtk.Window):
 
     def grab_input(self):
         """Grab keyboard+pointer so Print/keys can't reach other apps
-        (open context menus stay put) while the cropper is up."""
+        (open context menus stay put) while the cropper is up. Returns
+        True once the grab is held."""
         window = self.get_window()
         if window is None:
-            return
+            return False
         seat = Gdk.Display.get_default().get_default_seat()
-        seat.grab(
+        status = seat.grab(
             window,
             Gdk.SeatCapabilities.KEYBOARD | Gdk.SeatCapabilities.POINTER,
             False,
@@ -96,6 +103,19 @@ class Cropper(Gtk.Window):
             None,
             None,
         )
+        return status == Gdk.GrabStatus.SUCCESS
+
+    def retry_grab(self):
+        """The shortcut daemon still holds the keyboard while Print is
+        physically down, so the first grab fails with ALREADY_GRABBED.
+        This popup never gets WM focus, so without the grab Esc/Enter
+        go nowhere and the cropper hangs holding the screenshot lock
+        (every later Print silently does nothing). Retry until the key
+        is released."""
+        self.grab_tries += 1
+        if self.grab_input():
+            return False
+        return self.grab_tries < GRAB_RETRY_MAX
 
     def finish(self, code=1):
         Gdk.Display.get_default().get_default_seat().ungrab()

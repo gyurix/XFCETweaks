@@ -4,7 +4,14 @@
 The panel plugin asks for battery-level-<N>-charging-symbolic while on
 the charger. Theme stock for those names is a full-glyph bolt that hides
 the fill level, so shadow just those names with the regular level glyph
-plus a small thunderbolt straddling its bottom-right corner.
+plus a thunderbolt straddling its bottom-right corner.
+
+GTK renders -symbolic icons by forcing `fill: <fg>` on every path, so a
+bolt drawn with its own colors comes out in the same gray as the battery
+and disappears into the outline (charging looked like discharging). The
+bolt therefore uses class="warning" (GTK paints it with the theme's
+warning color), and a clip path cuts a gap around it out of the battery
+glyph so it stays readable at 16 px.
 
 Shadows live in ~/.local/share/icons/<theme>/status/symbolic, which GTK
 prefers over the system theme copy: a user hicolor fallback would never
@@ -22,8 +29,8 @@ UNIT_BOLT = (
     (0.60, 0.42),
     (0.85, 0.0),
 )
-BX, BY, BW, BH = 9.8, 8.6, 4.8, 7.2
-EDGE, FILL = "#2d2d2d", "#ffc107"
+BX, BY, BW, BH = 8.9, 6.4, 6.8, 9.6
+GAP_SCALE = 1.4
 LEVELS = (0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100)
 
 SRC_DIRS = (
@@ -36,8 +43,6 @@ DST_DIR = os.path.expanduser(
 
 
 def bolt_path(scale):
-    cx, cy = BX + BW / 2, BY + BH / 2
-
     def pt(u, v):
         if scale != 1.0:
             u = 0.5 + (u - 0.5) * scale
@@ -47,10 +52,14 @@ def bolt_path(scale):
     return "M" + "L".join(pt(u, v) for u, v in UNIT_BOLT) + "Z"
 
 
-BOLT = (
-    f'<path d="{bolt_path(1.0)}" fill="{EDGE}"/>\n'
-    f'<path d="{bolt_path(0.62)}" fill="{FILL}"/>\n'
+# Clip region = whole canvas minus a widened bolt (evenodd), applied to
+# the original glyph; the bolt itself is drawn on top in warning color.
+GAP_OPEN = (
+    '<defs><clipPath id="xt-bolt-gap" clipPathUnits="userSpaceOnUse">'
+    f'<path clip-rule="evenodd" d="M-2,-2H18V18H-2Z{bolt_path(GAP_SCALE)}"/>'
+    '</clipPath></defs>\n<g clip-path="url(#xt-bolt-gap)">\n'
 )
+BOLT = f'</g>\n<path class="warning" fill="#f57900" d="{bolt_path(1.0)}"/>\n'
 
 
 def find_base(level):
@@ -65,10 +74,12 @@ def find_base(level):
 def build(base_path):
     with open(base_path, encoding="utf-8") as handle:
         svg = handle.read()
+    start = svg.find("<svg")
+    open_end = svg.find(">", start) + 1 if start >= 0 else 0
     idx = svg.rfind("</svg>")
-    if idx < 0:
-        raise ValueError(f"no </svg> in {base_path}")
-    return svg[:idx] + BOLT + svg[idx:]
+    if start < 0 or open_end <= 0 or idx < open_end:
+        raise ValueError(f"no <svg>...</svg> in {base_path}")
+    return svg[:open_end] + "\n" + GAP_OPEN + svg[open_end:idx] + BOLT + svg[idx:]
 
 
 def main():
