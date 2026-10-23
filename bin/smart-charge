@@ -85,7 +85,8 @@ apply_on() {
     local bat cur
     if bat="$(find_battery || true)"; [[ -n "${bat:-}" ]]; then
         cur="$(active_type "$bat" || true)"
-        [[ "$cur" != "Long_Life" && -n "$cur" ]] && save_pref "$PREF_PREV" "$cur"
+        # Fast is a mode of its own, never a state "off" should return to.
+        case "$cur" in Long_Life|Fast|"") ;; *) save_pref "$PREF_PREV" "$cur" ;; esac
         write_sysfs "$bat/charge_types" "Long_Life"
         save_pref "$PREF_MODE" "on"
         return 0
@@ -105,7 +106,8 @@ apply_off() {
     if bat="$(find_battery || true)"; [[ -n "${bat:-}" ]]; then
         prev="Standard"
         [[ -r "$PREF_PREV" ]] && prev="$(tr -d ' \t\r\n' < "$PREF_PREV")"
-        [[ -z "$prev" ]] && prev="Standard"
+        # Stale prev=Fast/Long_Life (older versions) must not come back.
+        case "$prev" in ""|Fast|Long_Life) prev="Standard" ;; esac
         type_available "$bat" "$prev" || prev="Standard"
         write_sysfs "$bat/charge_types" "$prev"
         save_pref "$PREF_MODE" "off"
@@ -136,7 +138,7 @@ apply_fast() {
         return 1
     fi
     cur="$(active_type "$bat" || true)"
-    [[ "$cur" != "Fast" && "$cur" != "Long_Life" && -n "$cur" ]] && save_pref "$PREF_PREV" "$cur"
+    case "$cur" in Long_Life|Fast|"") ;; *) save_pref "$PREF_PREV" "$cur" ;; esac
     write_sysfs "$bat/charge_types" "Fast"
     save_pref "$PREF_MODE" "fast"
 }
