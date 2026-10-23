@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Build xfce4-power-manager with a "Fast charge" switch in the panel
-# plugin's battery menu (shown only where the battery lists the EC "Fast"
-# charge type; it calls `smart-charge fast on|off`).
+# Build xfce4-power-manager with "Battery preservation (80%)" and "Fast
+# charge" switches in the panel plugin's battery menu (each shown only where
+# the battery lists the EC "Long_Life" / "Fast" charge type; they call
+# `smart-charge on|off` / `smart-charge fast on|off`).
 #
 #   ./build.sh              build the .debs into $OUT, change nothing
 #   INSTALL=1 ./build.sh    also back up the stock .debs, install, restart panel
@@ -12,8 +13,20 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# make uses $INSTALL as the install program: keep our flag out of its env.
+DO_INSTALL="${INSTALL:-0}"
+unset INSTALL
+
+# Run from a shell without DISPLAY (ssh, IDE agent), `xfce4-panel -r` and the
+# xfconf/xcape calls silently miss the desktop: borrow the running panel's
+# display so the panel really restarts with the new plugin/icons.
+if [[ -z "${DISPLAY:-}" ]] && pid="$(pgrep -u "$(id -u)" -x xfce4-panel | head -n1)" && [[ -n "$pid" ]]; then
+    while IFS= read -r -d '' kv; do
+        case "$kv" in DISPLAY=*|XAUTHORITY=*) export "$kv" ;; esac
+    done < "/proc/$pid/environ"
+fi
 BASE_VER="${BASE_VER:-4.18.3+mint1}"
-NEW_VER="${BASE_VER}+fastcharge1"
+NEW_VER="${BASE_VER}+fastcharge2"
 MIRROR="${MIRROR:-http://packages.linuxmint.com/pool/upstream/x/xfce4-power-manager}"
 OUT="${OUT:-${TMPDIR:-/tmp}/xfce4-power-manager-fastcharge}"
 SRC="xfce4-power-manager_${BASE_VER}"
@@ -32,12 +45,13 @@ for ext in dsc tar.xz; do
 done
 dpkg-source -x "$OUT/dl/$SRC.dsc" "$OUT/build/src" >/dev/null
 
-echo "==> Applying fast-charge-switch.patch"
-patch -d "$OUT/build/src" -p1 < "$HERE/fast-charge-switch.patch"
+echo "==> Applying charge-type-switches.patch"
+patch -d "$OUT/build/src" -p1 < "$HERE/charge-type-switches.patch"
 {
     printf 'xfce4-power-manager (%s) zena; urgency=medium\n\n' "$NEW_VER"
-    printf '  * Panel plugin: add a "Fast charge" switch to the battery menu where the\n'
-    printf '    battery exposes the EC "Fast" charge_types entry (toggles via smart-charge).\n\n'
+    printf '  * Panel plugin: add "Battery preservation (80%%)" and "Fast charge" switches\n'
+    printf '    to the battery menu where the battery exposes the EC Long_Life / Fast\n'
+    printf '    charge_types entries (toggles via smart-charge).\n\n'
     printf ' -- %s <%s>  %s\n\n' "$(git config user.name || echo XFCETweaks)" \
         "$(git config user.email || echo none@localhost)" "$(date -R)"
     cat "$OUT/build/src/debian/changelog"
@@ -51,7 +65,7 @@ rm -rf "$OUT/debs"; mkdir -p "$OUT/debs"
 cp "$OUT"/build/xfce4-power-manager{,-data,-plugins}_"${NEW_VER}"_*.deb "$OUT/debs/"
 echo "Built: $(ls "$OUT/debs" | tr '\n' ' ')"
 
-[[ "${INSTALL:-0}" == "1" ]] || { echo "Not installing (INSTALL=1 to install). Debs in $OUT/debs"; exit 0; }
+[[ "$DO_INSTALL" == "1" ]] || { echo "Not installing (INSTALL=1 to install). Debs in $OUT/debs"; exit 0; }
 
 echo "==> Backing up stock packages to $OUT/orig"
 mkdir -p "$OUT/orig"

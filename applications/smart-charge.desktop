@@ -1,0 +1,18 @@
+[Desktop Entry]
+Type=Application
+Name=Battery Preservation
+Comment=Toggle the 80% charge cap that protects the battery when plugged in all day
+Exec=smart-charge toggle
+Icon=battery-good-symbolic
+Terminal=false
+Categories=Settings;HardwareSettings;
+Actions=On;Off;
+Keywords=battery;charge;preservation;conservation;limit;80;power;
+
+[Desktop Action On]
+Name=Preservation on (80% cap)
+Exec=smart-charge on
+
+[Desktop Action Off]
+Name=Preservation off (charge to 100%)
+Exec=smart-charge off

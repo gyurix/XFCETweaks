@@ -12,12 +12,14 @@
 #
 # "fast" selects the EC Fast charge type instead. The EC holds a single
 # charge type, so fast and the 80% cap are mutually exclusive: enabling
-# one replaces the other.
+# one replaces the other. Turning fast off returns to the mode that was
+# active before (the 80% cap stays on if it was on).
 set -euo pipefail
 
 PREF_DIR=/var/lib/XFCETweaks
 PREF_MODE=$PREF_DIR/smart-charge.mode
 PREF_PREV=$PREF_DIR/smart-charge.prev
+PREF_FAST_PREV=$PREF_DIR/smart-charge.fastprev
 
 find_battery() {
     local b
@@ -139,13 +141,31 @@ apply_fast() {
     fi
     cur="$(active_type "$bat" || true)"
     case "$cur" in Long_Life|Fast|"") ;; *) save_pref "$PREF_PREV" "$cur" ;; esac
+    # Remember whether the 80% cap was on, so fast off can bring it back.
+    if [[ "$cur" != "Fast" ]]; then
+        [[ "$cur" == "Long_Life" ]] && save_pref "$PREF_FAST_PREV" "on" \
+                                    || save_pref "$PREF_FAST_PREV" "off"
+    fi
     write_sysfs "$bat/charge_types" "Fast"
     save_pref "$PREF_MODE" "fast"
 }
 
+# Leave fast charge for whatever was active before it.
+fast_off() {
+    local was="off"
+    [[ -r "$PREF_FAST_PREV" ]] && was="$(tr -d ' \t\r\n' < "$PREF_FAST_PREV")"
+    if [[ "$was" == "on" ]]; then
+        apply_on
+        FAST_OFF_MSG="Fast charge off - preservation on (80% cap)"
+    else
+        apply_off
+        FAST_OFF_MSG="Fast charge off - standard charging"
+    fi
+}
+
 notify_fast() { # $1 = 0|1
     local msg
-    [[ "$1" == "1" ]] && msg="Fast charge on" || msg="Fast charge off - standard charging"
+    [[ "$1" == "1" ]] && msg="Fast charge on" || msg="${FAST_OFF_MSG:-Fast charge off - standard charging}"
     if command -v notify-send >/dev/null 2>&1; then
         /usr/bin/notify-send --app-name="Battery" --urgency=low \
             --icon=battery-good-charging-symbolic "$msg" >/dev/null 2>&1 || true
@@ -177,9 +197,11 @@ case "${1:-status}" in
   fast)
     case "${2:-toggle}" in
       on)  apply_fast; notify_fast 1 ;;
-      off) apply_off; notify_fast 0 ;;
+      off)
+        if [[ "$(read_fast_state)" == "1" ]]; then fast_off; notify_fast 0;
+        else echo "Fast charge already off"; fi ;;
       toggle)
-        if [[ "$(read_fast_state)" == "1" ]]; then apply_off; notify_fast 0;
+        if [[ "$(read_fast_state)" == "1" ]]; then fast_off; notify_fast 0;
         else apply_fast; notify_fast 1; fi ;;
       status) read_fast_state; echo ;;
       *) echo "Usage: $0 fast {on|off|toggle|status}" >&2; exit 2 ;;

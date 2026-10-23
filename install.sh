@@ -5,6 +5,15 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Run from a shell without DISPLAY (ssh, IDE agent), `xfce4-panel -r` and the
+# xfconf/xcape calls silently miss the desktop: borrow the running panel's
+# display so the panel really restarts with the new plugin/icons.
+if [[ -z "${DISPLAY:-}" ]] && pid="$(pgrep -u "$(id -u)" -x xfce4-panel | head -n1)" && [[ -n "$pid" ]]; then
+    while IFS= read -r -d '' kv; do
+        case "$kv" in DISPLAY=*|XAUTHORITY=*) export "$kv" ;; esac
+    done < "/proc/$pid/environ"
+fi
+
 echo "==> Installing packages (skip with SKIP_APT=1)"
 if [[ "${SKIP_APT:-0}" != "1" ]]; then
     sudo apt-get update

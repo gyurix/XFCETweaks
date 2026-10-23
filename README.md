@@ -238,16 +238,17 @@ deprecated `conservation_mode` for the same EC bit), and the panel always
 shows the exact percentage. The choice persists across reboot/power loss
 (`smart-charge.service` re-applies it, the EC forgets), and the EC holds
 above the threshold instead of draining: enabling at 83% keeps 83%, it
-just stops charging further.
+just stops charging further. The **Battery Preservation** menu entry
+toggles it too.
 
 `smart-charge fast on | off | toggle | status` selects the EC `Fast`
 charge type instead, and the **Fast Charge** menu entry (also pinnable to
 the panel) toggles it. The EC holds one charge type at a time, so fast
 charge and the 80% cap replace each other; turning fast off returns to
-standard charging.
+whatever was active before (the 80% cap comes back if it was on).
 
-The Power Manager battery menu in the panel can show a **Fast charge**
-switch too. Stock xfce4-power-manager has no such hook, so
+The Power Manager battery menu in the panel shows **Battery preservation
+(80%)** and **Fast charge** switches too. Stock xfce4-power-manager has no such hook, so
 `packaging/xfce4-power-manager/build.sh` rebuilds the Mint package with a
 small patch (`INSTALL=1` backs up the stock debs, installs the build and
 restarts the panel). Hold the package afterwards so `apt upgrade` doesn't
