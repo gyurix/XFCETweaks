@@ -103,6 +103,34 @@ xfconf-query -c xfce4-panel -p /plugins/plugin-1/button-icon -n -t string -s lin
 xfconf-query -c xfce4-panel -p /plugins/plugin-1/show-button-title -n -t bool -s false
 xfconf-query -c xfce4-panel -p /plugins/plugin-1/small -n -t bool -s false
 
+# A crashed unique plugin can be removed from the panel's plugin-id array
+# while its xfconf entry remains. Restore the power manager plugin instead
+# of leaving the taskbar without a battery indicator.
+power_plugin_id=""
+while IFS= read -r prop; do
+    [[ "$prop" == /plugins/plugin-* ]] || continue
+    [[ "$prop" == */* ]] && continue
+    if [[ "$(xfconf-query -c xfce4-panel -p "$prop" 2>/dev/null || true)" == "power-manager-plugin" ]]; then
+        power_plugin_id="${prop##*-}"
+        break
+    fi
+done < <(xfconf-query -c xfce4-panel -l 2>/dev/null)
+if [[ -z "$power_plugin_id" ]]; then
+    power_plugin_id=11
+    xfconf-query -c xfce4-panel -p "/plugins/plugin-$power_plugin_id" -n -t string -s power-manager-plugin
+fi
+mapfile -t panel_ids < <(xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids 2>/dev/null |
+    awk '/^[[:space:]]*[0-9]+[[:space:]]*$/ { print $1 }')
+if ! printf '%s\n' "${panel_ids[@]}" | grep -qx "$power_plugin_id"; then
+    panel_ids+=("$power_plugin_id")
+    panel_id_args=(-a)
+    for id in "${panel_ids[@]}"; do
+        panel_id_args+=(-t int -s "$id")
+    done
+    xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids "${panel_id_args[@]}"
+    PANEL_RESTART=1
+fi
+
 # Super-tap opens Whisker via Alt+F1; make sure the autostart mapping and
 # the daemon agree with the bindings above.
 mkdir -p "$HOME/.config/autostart"
