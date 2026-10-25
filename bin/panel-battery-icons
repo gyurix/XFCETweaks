@@ -18,6 +18,8 @@ prefers over the system theme copy: a user hicolor fallback would never
 be reached because the theme itself ships these names.
 """
 import os
+import re
+import subprocess
 import sys
 
 UNIT_BOLT = (
@@ -33,13 +35,9 @@ BX, BY, BW, BH = 8.9, 6.4, 6.8, 9.6
 GAP_SCALE = 1.4
 LEVELS = (0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100)
 
-SRC_DIRS = (
-    "/usr/share/icons/elementary-xfce/status/symbolic",
-    "/usr/share/icons/Adwaita/symbolic/status",
-)
-DST_DIR = os.path.expanduser(
-    "~/.local/share/icons/elementary-xfce/status/symbolic"
-)
+ICON_ROOT = os.path.expanduser("~/.local/share/icons")
+SYSTEM_ICON_ROOTS = ("/usr/share/icons", "/usr/local/share/icons")
+FALLBACK_THEMES = ("elementary-xfce", "Adwaita", "hicolor")
 
 
 def bolt_path(scale):
@@ -62,13 +60,89 @@ GAP_OPEN = (
 BOLT = f'</g>\n<path class="warning" fill="#f57900" d="{bolt_path(1.0)}"/>\n'
 
 
-def find_base(level):
-    name = f"battery-level-{level}-symbolic.svg"
-    for src in SRC_DIRS:
-        path = os.path.join(src, name)
+def active_theme():
+    try:
+        theme = subprocess.check_output(
+            ["xfconf-query", "-c", "xsettings", "-p", "/Net/IconThemeName"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        ).strip()
+        if theme:
+            return theme
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return "elementary-xfce"
+
+
+def theme_index(theme):
+    for root in (ICON_ROOT,) + SYSTEM_ICON_ROOTS:
+        path = os.path.join(root, theme, "index.theme")
         if os.path.exists(path):
             return path
     return None
+
+
+def theme_chain(theme):
+    chain = []
+    pending = [theme]
+    while pending:
+        current = pending.pop(0)
+        if not current or current in chain:
+            continue
+        chain.append(current)
+        index = theme_index(current)
+        if index is None:
+            continue
+        try:
+            with open(index, encoding="utf-8") as handle:
+                inherits = next(
+                    (line.partition("=")[2].strip() for line in handle
+                     if line.startswith("Inherits=")),
+                    "",
+                )
+        except OSError:
+            inherits = ""
+        pending.extend(name.strip() for name in inherits.split(","))
+    for fallback in FALLBACK_THEMES:
+        if fallback not in chain:
+            chain.append(fallback)
+    return chain
+
+
+def find_base(level, themes):
+    name = f"battery-level-{level}-symbolic.svg"
+    for theme in themes:
+        for root in SYSTEM_ICON_ROOTS:
+            for subdir in ("status/symbolic", "symbolic/status"):
+                path = os.path.join(root, theme, subdir, name)
+                if os.path.exists(path):
+                    return path
+    return None
+
+
+def ensure_theme_index(theme):
+    destination = os.path.join(ICON_ROOT, theme)
+    os.makedirs(destination, exist_ok=True)
+    target = os.path.join(destination, "index.theme")
+    if os.path.exists(target):
+        return
+    source = theme_index(theme)
+    if source is not None and os.path.abspath(source) != os.path.abspath(target):
+        with open(source, encoding="utf-8") as handle:
+            index = handle.read()
+    else:
+        index = "[Icon Theme]\nName=%s\nDirectories=status/symbolic\n\n" % theme
+    if "status/symbolic" not in index:
+        index = re.sub(
+            r"^Directories=(.*)$",
+            lambda match: "Directories=" + match.group(1).rstrip(",") + ",status/symbolic",
+            index,
+            count=1,
+            flags=re.MULTILINE,
+        )
+    with open(target, "w", encoding="utf-8") as handle:
+        handle.write(index)
 
 
 def build(base_path):
@@ -83,10 +157,17 @@ def build(base_path):
 
 
 def main():
-    os.makedirs(DST_DIR, exist_ok=True)
+    themes = theme_chain(active_theme())
+    destination_theme = next(
+        (theme for theme in themes if find_base(0, (theme,)) is not None),
+        "elementary-xfce",
+    )
+    ensure_theme_index(destination_theme)
+    dst_dir = os.path.join(ICON_ROOT, destination_theme, "status", "symbolic")
+    os.makedirs(dst_dir, exist_ok=True)
     changed = 0
     for level in LEVELS:
-        base = find_base(level)
+        base = find_base(level, themes)
         if base is None:
             print(f"panel-battery-icons: no base for level {level}", file=sys.stderr)
             continue
@@ -95,7 +176,7 @@ def main():
         if level == 100:
             targets.append("battery-level-100-charged-symbolic.svg")
         for name in targets:
-            path = os.path.join(DST_DIR, name)
+            path = os.path.join(dst_dir, name)
             try:
                 with open(path, encoding="utf-8") as handle:
                     if handle.read() == svg:
@@ -105,6 +186,16 @@ def main():
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(svg)
             changed += 1
+    try:
+        subprocess.run(
+            ["gtk-update-icon-cache", "-f", "-t", os.path.join(ICON_ROOT, destination_theme)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
     print(f"panel-battery-icons: {changed} icon(s) updated")
     return 0
 
