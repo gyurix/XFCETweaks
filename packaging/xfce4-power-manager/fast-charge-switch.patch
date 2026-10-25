@@ -1,15 +1,193 @@
---- a/panel-plugins/power-manager-plugin/power-manager-button.c	2026-10-22 09:34:28.863458397 +0200
-+++ b/panel-plugins/power-manager-plugin/power-manager-button.c	2026-10-22 09:34:28.883954572 +0200
-@@ -1559,6 +1559,125 @@
+--- a/panel-plugins/power-manager-plugin/power-manager-button.c
++++ b/panel-plugins/power-manager-plugin/power-manager-button.c
+@@ -1076,6 +1076,16 @@
+     power_manager_button_show_menu (button);
+     return TRUE;
+   }
++  else if (event->button == 1 &&
++           (button->priv->menu == NULL ||
++            !gtk_widget_get_mapped (button->priv->menu)))
++  {
++    /* A dead menu (closed without reaching the deactivate handler, e.g.
++     * a panel reload) leaves the panel icon toggled on, and then every
++     * later left click does nothing: heal by re-opening. */
++    power_manager_button_show_menu (button);
++    return TRUE;
++  }
+ 
+   if (event->button == 2)
+   {
+@@ -1447,12 +1463,23 @@
+         needs_seperator = TRUE;
+       }
+ 
+-      /* Add the list of programs to the menu */
++      /* Firefox and friends inhibit through more than one interface,
++       * so the daemon can report the same name twice; each app is
++       * clearer shown just once. */
++      GHashTable *seen = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+       while (g_variant_iter_next (iter, "s", &value))
+       {
+-        add_inhibitor_to_menu (button, value);
++        if (!g_hash_table_contains (seen, value))
++          g_hash_table_add (seen, g_strdup (value));
++        g_free (value);
+       }
+       g_variant_iter_free (iter);
++      GHashTableIter seen_iter;
++      gpointer seen_key;
++      g_hash_table_iter_init (&seen_iter, seen);
++      while (g_hash_table_iter_next (&seen_iter, &seen_key, NULL))
++        add_inhibitor_to_menu (button, (const gchar *) seen_key);
++      g_hash_table_destroy (seen);
+       g_variant_unref (reply);
+ 
+     } else {
+@@ -1559,6 +1582,275 @@
  #endif
  
  
-+/* Fast charge: Lenovo/IdeaPad EC "Fast" entry of the battery charge_types
-+ * attribute. The row is only shown where the kernel lists it; the actual
-+ * switching is delegated to the smart-charge helper (persistence, sudo,
-+ * notification), so this code never writes to sysfs itself. */
++/* Print while the battery menu is open: the popup's X grabs shadow the
++ * shortcut daemons, so the Print key would die in the menu and no
++ * screenshot would run. Freeze the screen in-process (the open menu
++ * stays in the frozen image), close the menu so the cropper can take
++ * its own grabs, then run the standard screenshot helper on it.
++ *
++ * The root capture can intermittently come up empty under the open
++ * menu's grabs: take a retry, then fall through to an external XGetImage
++ * (import -window root) while the menu is still on screen. */
++static GdkPixbuf *
++battery_menu_capture_root (void)
++{
++  GdkWindow *root = gdk_get_default_root_window ();
++  GdkPixbuf *pb = NULL;
++
++  if (root == NULL)
++    return NULL;
++
++  pb = gdk_pixbuf_get_from_window (root, 0, 0,
++                                   gdk_window_get_width (root),
++                                   gdk_window_get_height (root));
++  if (pb == NULL)
++  {
++    g_usleep (100000);
++    pb = gdk_pixbuf_get_from_window (root, 0, 0,
++                                     gdk_window_get_width (root),
++                                     gdk_window_get_height (root));
++  }
++  if (pb == NULL)
++    g_warning ("battery menu: in-process root capture failed");
++  return pb;
++}
++
++static gboolean
++battery_menu_import_to (const gchar *path)
++{
++  gchar *target = g_strconcat ("png:", path, NULL);
++  gchar *argv[] = { (gchar *) "import", (gchar *) "-window", (gchar *) "root",
++                    target, NULL };
++  GError *error = NULL;
++  gboolean ok = g_spawn_sync (NULL, argv, NULL,
++                              G_SPAWN_SEARCH_PATH | G_SPAWN_STDOUT_TO_DEV_NULL |
++                              G_SPAWN_STDERR_TO_DEV_NULL,
++                              NULL, NULL, NULL, NULL, NULL, &error);
++  if (!ok)
++  {
++    g_warning ("battery menu: import capture failed: %s",
++               error != NULL ? error->message : "unknown");
++    g_clear_error (&error);
++  }
++  g_free (target);
++  return ok;
++}
++
++static void
++battery_menu_spawn_screenshot (const gchar *mode, const gchar *frozen_png)
++{
++  gchar *tool = g_build_filename (g_get_home_dir (), ".local", "bin",
++                                  "rect-screenshot-clipboard", NULL);
++  gchar *argv[4] = { tool, NULL, NULL, NULL };
++
++  if (frozen_png != NULL)
++  {
++    argv[1] = "frozen";
++    argv[2] = (gchar *) frozen_png;
++  }
++  else
++    argv[1] = (gchar *) mode;
++
++  if (!g_file_test (tool, G_FILE_TEST_IS_EXECUTABLE))
++    argv[0] = "rect-screenshot-clipboard";
++
++  g_spawn_async (NULL, argv, NULL,
++                 G_SPAWN_SEARCH_PATH | G_SPAWN_STDOUT_TO_DEV_NULL |
++                 G_SPAWN_STDERR_TO_DEV_NULL, NULL, NULL, NULL, NULL);
++  g_free (tool);
++}
++
++static gboolean
++battery_menu_key_press_cb (GtkWidget *menu, GdkEventKey *event, gpointer user_data)
++{
++  GdkPixbuf *pb;
++  gint fd;
++  gchar *tmpfile = NULL;
++
++  if (event == NULL || event->keyval != GDK_KEY_Print)
++    return FALSE;
++
++  if ((event->state & GDK_SHIFT_MASK) != 0)
++    battery_menu_spawn_screenshot ("full", NULL);
++  else if ((event->state & GDK_MOD1_MASK) != 0)
++    battery_menu_spawn_screenshot ("window", NULL);
++  else
++  {
++    pb = battery_menu_capture_root ();
++    if (pb == NULL)
++      battery_menu_spawn_screenshot ("region", NULL);
++    else
++    {
++      fd = g_file_open_tmp ("panel-menu-frozen-XXXXXX.png", &tmpfile, NULL);
++      if (fd == -1)
++        battery_menu_spawn_screenshot ("region", NULL);
++      else
++      {
++        GError *error = NULL;
++
++        close (fd);
++        if (gdk_pixbuf_save (pb, tmpfile, "png", &error, NULL))
++          battery_menu_spawn_screenshot (NULL, tmpfile);
++        else
++        {
++          g_warning ("menu screenshot capture failed: %s",
++                     error != NULL ? error->message : "unknown");
++          g_clear_error (&error);
++          /* The menu is still on screen, so an external grab sees it too. */
++          if (battery_menu_import_to (tmpfile))
++            battery_menu_spawn_screenshot (NULL, tmpfile);
++          else
++          {
++            remove (tmpfile);
++            battery_menu_spawn_screenshot ("region", NULL);
++          }
++        }
++      }
++      g_free (tmpfile);
++      g_object_unref (pb);
++    }
++  }
++
++  /* The cropper needs the grabs the menu is holding. */
++  gtk_menu_shell_cancel (GTK_MENU_SHELL (menu));
++
++  return TRUE;
++}
++
++/* Charge type switches: Lenovo/IdeaPad EC entries of the battery
++ * charge_types attribute (e.g. "Fast" = fast charge). A row is only shown where the kernel lists the
++ * type; the switching is delegated to the smart-charge helper (persistence,
++ * sudo, notification), so this code never writes to sysfs itself. */
 +static gchar *
-+fast_charge_find_attr (void)
++charge_type_find_attr (const gchar *type_name)
 +{
 +  GDir *dir;
 +  const gchar *name;
@@ -28,7 +206,7 @@
 +    if (g_file_get_contents (type_path, &type, NULL, NULL) &&
 +        g_str_has_prefix (type, "Battery") &&
 +        g_file_get_contents (attr_path, &types, NULL, NULL) &&
-+        strstr (types, "Fast") != NULL)
++        strstr (types, type_name) != NULL)
 +      found = g_strdup (attr_path);
 +
 +    g_free (type_path);
@@ -42,24 +220,36 @@
 +}
 +
 +static gboolean
-+fast_charge_is_active (const gchar *attr_path)
++charge_type_is_active (const gchar *attr_path, const gchar *type_name)
 +{
 +  gchar *types = NULL;
++  gchar *needle;
 +  gboolean active;
 +
 +  if (!g_file_get_contents (attr_path, &types, NULL, NULL))
 +    return FALSE;
 +
-+  active = strstr (types, "[Fast]") != NULL;
++  needle = g_strdup_printf ("[%s]", type_name);
++  active = strstr (types, needle) != NULL;
++  g_free (needle);
 +  g_free (types);
 +  return active;
 +}
 +
++/* subcommand: "fast" -> `smart-charge fast on|off`, NULL -> `smart-charge on|off` */
 +static void
-+fast_charge_set (gboolean on)
++charge_type_set (const gchar *subcommand, gboolean on)
 +{
 +  gchar *tool = g_build_filename (g_get_home_dir (), ".local", "bin", "smart-charge", NULL);
-+  gchar *argv[] = { tool, "fast", on ? "on" : "off", NULL };
++  gchar *argv[4] = { tool, NULL, NULL, NULL };
++
++  if (subcommand != NULL)
++  {
++    argv[1] = (gchar *) subcommand;
++    argv[2] = on ? "on" : "off";
++  }
++  else
++    argv[1] = on ? "on" : "off";
 +
 +  if (!g_file_test (tool, G_FILE_TEST_IS_EXECUTABLE))
 +    argv[0] = "smart-charge";
@@ -72,23 +262,26 @@
 +
 +#ifdef XFCE_PLUGIN
 +static void
-+fast_charge_switch_cb (GObject *sw, GParamSpec *pspec, gpointer user_data)
++charge_type_switch_cb (GObject *sw, GParamSpec *pspec, gpointer user_data)
 +{
-+  fast_charge_set (gtk_switch_get_active (GTK_SWITCH (sw)));
++  charge_type_set (user_data, gtk_switch_get_active (GTK_SWITCH (sw)));
 +}
 +#else
 +static void
-+fast_charge_toggled_cb (GtkCheckMenuItem *mi, gpointer user_data)
++charge_type_toggled_cb (GtkCheckMenuItem *mi, gpointer user_data)
 +{
-+  fast_charge_set (gtk_check_menu_item_get_active (mi));
++  charge_type_set (user_data, gtk_check_menu_item_get_active (mi));
 +}
 +#endif
 +
 +static void
-+power_manager_button_add_fast_charge (GtkWidget *menu)
++power_manager_button_add_charge_type (GtkWidget   *menu,
++                                      const gchar *type_name,
++                                      const gchar *label_text,
++                                      const gchar *subcommand)
 +{
 +  GtkWidget *mi;
-+  gchar *attr = fast_charge_find_attr ();
++  gchar *attr = charge_type_find_attr (type_name);
 +  gboolean active;
 +#ifdef XFCE_PLUGIN
 +  GtkWidget *box, *label, *sw;
@@ -97,13 +290,13 @@
 +  if (attr == NULL)
 +    return;
 +
-+  active = fast_charge_is_active (attr);
++  active = charge_type_is_active (attr, type_name);
 +  g_free (attr);
 +
 +#ifdef XFCE_PLUGIN
 +  mi = gtk_menu_item_new ();
 +  box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
-+  label = gtk_label_new_with_mnemonic (_("Fast _charge"));
++  label = gtk_label_new_with_mnemonic (label_text);
 +  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
 +  sw = gtk_switch_new ();
 +  gtk_switch_set_active (GTK_SWITCH (sw), active);
@@ -112,11 +305,11 @@
 +  gtk_container_add (GTK_CONTAINER (mi), box);
 +  g_signal_connect (G_OBJECT (mi), "activate", G_CALLBACK (power_manager_button_toggle_presentation_mode), sw);
 +  /* connect after the initial state is set so opening the menu never toggles */
-+  g_signal_connect (G_OBJECT (sw), "notify::active", G_CALLBACK (fast_charge_switch_cb), NULL);
++  g_signal_connect (G_OBJECT (sw), "notify::active", G_CALLBACK (charge_type_switch_cb), (gpointer) subcommand);
 +#else
-+  mi = gtk_check_menu_item_new_with_mnemonic (_("Fast _charge"));
++  mi = gtk_check_menu_item_new_with_mnemonic (label_text);
 +  gtk_check_menu_item_set_active (GTK_CHECK_MENU_ITEM (mi), active);
-+  g_signal_connect (G_OBJECT (mi), "toggled", G_CALLBACK (fast_charge_toggled_cb), NULL);
++  g_signal_connect (G_OBJECT (mi), "toggled", G_CALLBACK (charge_type_toggled_cb), (gpointer) subcommand);
 +#endif
 +  gtk_widget_show_all (mi);
 +  gtk_menu_shell_append (GTK_MENU_SHELL (menu), mi);
@@ -126,12 +319,24 @@
  void
  power_manager_button_show_menu (PowerManagerButton *button)
  {
-@@ -1658,6 +1777,9 @@
+@@ -1584,6 +1876,10 @@
+   button->priv->menu = menu;
+   g_signal_connect(GTK_MENU_SHELL(menu), "deactivate", G_CALLBACK(menu_destroyed_cb), button);
+   gtk_menu_attach_to_widget (GTK_MENU (menu), GTK_WIDGET (button), NULL);
++  /* Print must not die in the menu's grabs: freeze the screen, close the
++   * menu and run the standard screenshot helper on the frozen image. */
++  g_signal_connect (G_OBJECT (menu), "key-press-event",
++                    G_CALLBACK (battery_menu_key_press_cb), button);
+ 
+   for (item = g_list_first (button->priv->devices); item != NULL; item = g_list_next (item))
+   {
+@@ -1658,6 +1954,10 @@
    gtk_widget_show_all (mi);
    gtk_menu_shell_append (GTK_MENU_SHELL (menu), mi);
  
-+  /* Fast charge switch - only where the battery supports it */
-+  power_manager_button_add_fast_charge (menu);
++  /* Fast charge switch - only where the battery supports it. Battery
++   * preservation stays out: it has its own menu entry (smart-charge). */
++  power_manager_button_add_charge_type (menu, "Fast", _("Fast _charge"), "fast");
 +
    /* Show any applications currently inhibiting now */
    display_inhibitors (button, menu);
