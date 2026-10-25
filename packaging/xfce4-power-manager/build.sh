@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Build xfce4-power-manager with a "Fast charge" switch in the panel
 # plugin's battery menu (shown only where the battery lists the EC "Fast"
-# charge type; it calls `smart-charge fast on|off`).
+# charge type; it calls `smart-charge fast on|off`). Print works while the
+# battery menu is open and left clicks recover from a dead menu state.
 #
 #   ./build.sh              build the .debs into $OUT, change nothing
 #   INSTALL=1 ./build.sh    also back up the stock .debs, install, restart panel
@@ -26,7 +27,7 @@ if [[ -z "${DISPLAY:-}" ]] && pid="$(pgrep -u "$(id -u)" -x xfce4-panel | head -
 fi
 
 BASE_VER="${BASE_VER:-4.18.3+mint1}"
-NEW_VER="${BASE_VER}+fastcharge3"
+NEW_VER="${BASE_VER}+fastcharge8"
 MIRROR="${MIRROR:-http://packages.linuxmint.com/pool/upstream/x/xfce4-power-manager}"
 OUT="${OUT:-${TMPDIR:-/tmp}/xfce4-power-manager-fastcharge}"
 SRC="xfce4-power-manager_${BASE_VER}"
@@ -49,8 +50,9 @@ echo "==> Applying fast-charge-switch.patch"
 patch -d "$OUT/build/src" -p1 < "$HERE/fast-charge-switch.patch"
 {
     printf 'xfce4-power-manager (%s) zena; urgency=medium\n\n' "$NEW_VER"
-    printf '  * Panel plugin: add a "Fast charge" switch to the battery menu where the\n'
-    printf '    battery exposes the EC "Fast" charge_types entry (toggles via smart-charge).\n\n'
+    printf '  * Battery menu: "Fast charge" switch; Print works while the menu is\n'
+    printf '    open (freeze, close, crop via the screenshot helper); a dead menu no\n'
+    printf '    longer disables left click; inhibiting apps are listed once.\n\n'
     printf ' -- %s <%s>  %s\n\n' "$(git config user.name || echo XFCETweaks)" \
         "$(git config user.email || echo none@localhost)" "$(date -R)"
     cat "$OUT/build/src/debian/changelog"
